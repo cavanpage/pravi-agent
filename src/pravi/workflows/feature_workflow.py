@@ -26,6 +26,7 @@ class FeatureWorkflowInput:
     branch: str
     base_ref: str = "main"
     smoke_command: list[str] | None = None
+    delete_branch_on_cleanup: bool = False
 
 
 @dataclass
@@ -74,7 +75,11 @@ class FeatureWorkflow:
         finally:
             await workflow.execute_activity(
                 remove_worktree,
-                CleanupRequest(repo_path=inp.repo_path, worktree_path=wt.path),
+                CleanupRequest(
+                    repo_path=inp.repo_path,
+                    worktree_path=wt.path,
+                    delete_branch=wt.branch if inp.delete_branch_on_cleanup else None,
+                ),
                 start_to_close_timeout=timedelta(minutes=2),
                 retry_policy=RetryPolicy(maximum_attempts=3),
             )

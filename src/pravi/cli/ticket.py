@@ -8,10 +8,24 @@ from typing import Annotated
 import typer
 from rich.console import Console
 from temporalio.client import Client
+from temporalio.common import (
+    SearchAttributePair,
+    TypedSearchAttributes,
+    WorkflowIDReusePolicy,
+)
+from temporalio.service import RPCError
 
 from pravi.config import get_settings
 from pravi.domains.registry import DomainRegistry
 from pravi.logging_setup import configure_logging
+from pravi.temporal_utils import (
+    DOMAIN,
+    PRAVI_STATUS,
+    REPO_NAME,
+    TICKET_ID,
+    feature_workflow_id,
+    repo_slug,
+)
 from pravi.workflows.feature_workflow import (
     FeatureWorkflow,
     FeatureWorkflowInput,
@@ -87,31 +101,60 @@ def run_ticket(
         console.print("[yellow]--fake ignored: explicit ticket_id provided[/]")
     branch = f"pravi/{tid}-{chosen.name}"
 
+    is_fake_run = tid.startswith("fake-")
     inp = FeatureWorkflowInput(
         repo_path=str(repo),
         ticket_id=tid,
         branch=branch,
         base_ref=base_ref,
         smoke_command=cmd,
+        delete_branch_on_cleanup=is_fake_run,
     )
 
+    workflow_id = feature_workflow_id(repo, tid)
     console.print(
         f"[bold]pravi[/] starting workflow for ticket [cyan]{tid}[/] "
         f"on domain [magenta]{chosen.name}[/] (repo: {repo})"
     )
 
-    result = asyncio.run(_run_workflow(inp))
+    try:
+        result = asyncio.run(_run_workflow(inp, workflow_id, chosen.name))
+    except RPCError as e:
+        # ALLOW_DUPLICATE_FAILED_ONLY: a running or successfully-closed
+        # workflow with the same ID will refuse to start. Surface a friendly
+        # message instead of a stack trace.
+        if "WorkflowExecutionAlreadyStarted" in str(e):
+            console.print(
+                f"[red]error[/] workflow [bold]{workflow_id}[/] is already running "
+                f"or completed. Terminate it in the Temporal UI to re-run, "
+                f"or wait for it to fail."
+            )
+            raise typer.Exit(code=1) from e
+        raise
     console.print(f"[green]done[/] {result.summary}")
 
 
-async def _run_workflow(inp: FeatureWorkflowInput) -> FeatureWorkflowResult:
+async def _run_workflow(
+    inp: FeatureWorkflowInput,
+    workflow_id: str,
+    domain_name: str,
+) -> FeatureWorkflowResult:
     settings = get_settings()
     client = await Client.connect(settings.temporal_host, namespace=settings.temporal_namespace)
     handle = await client.start_workflow(
         FeatureWorkflow.run,
         inp,
-        id=f"feature-{inp.ticket_id}",
-        task_queue=settings.temporal_task_queue,
+        id=workflow_id,
+        task_queue=settings.temporal_task_queue_features,
+        id_reuse_policy=WorkflowIDReusePolicy.ALLOW_DUPLICATE_FAILED_ONLY,
+        search_attributes=TypedSearchAttributes(
+            [
+                SearchAttributePair(REPO_NAME, repo_slug(inp.repo_path)),
+                SearchAttributePair(DOMAIN, domain_name),
+                SearchAttributePair(TICKET_ID, inp.ticket_id),
+                SearchAttributePair(PRAVI_STATUS, "running"),
+            ]
+        ),
     )
     console.print(f"workflow id: [dim]{handle.id}[/]  (Temporal UI: http://localhost:8233)")
     return await handle.result()

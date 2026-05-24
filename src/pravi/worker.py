@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import argparse
 import asyncio
+from typing import Literal
 
 import structlog
 from temporalio.client import Client
@@ -13,28 +15,83 @@ from pravi.workflows.feature_workflow import FeatureWorkflow
 
 log = structlog.get_logger(__name__)
 
+Queue = Literal["features", "llm"]
 
-async def run() -> None:
+
+def _resolve_queue(queue: Queue) -> tuple[str, list, list]:
+    """Return (task_queue_name, workflows, activities) for the given pool.
+
+    Workflows are registered on both pools so workflow tasks load-balance.
+    Activities are pool-specific so `execute_activity(..., task_queue=...)`
+    routes work to the right worker — and concurrency caps actually mean
+    something.
+    """
+    s = get_settings()
+    if queue == "features":
+        return (
+            s.temporal_task_queue_features,
+            [FeatureWorkflow],
+            [create_worktree, remove_worktree, run_command],
+        )
+    if queue == "llm":
+        # Slice 1 will register dev_activity / review_activity here.
+        return (s.temporal_task_queue_llm, [FeatureWorkflow], [])
+    raise ValueError(f"unknown queue: {queue}")
+
+
+async def run(queue: Queue, max_activities: int | None) -> None:
     settings = get_settings()
     configure_logging(settings.log_level)
     client = await Client.connect(settings.temporal_host, namespace=settings.temporal_namespace)
+    task_queue, workflows, activities = _resolve_queue(queue)
+
+    if queue == "llm" and not activities:
+        log.warning(
+            "worker.llm_queue_empty",
+            note="no LLM activities registered yet; this worker will only handle workflow tasks",
+        )
+
     log.info(
         "worker.starting",
         host=settings.temporal_host,
         namespace=settings.temporal_namespace,
-        task_queue=settings.temporal_task_queue,
+        queue=queue,
+        task_queue=task_queue,
+        max_concurrent_activities=max_activities,
     )
+    worker_kwargs = {}
+    if max_activities is not None:
+        worker_kwargs["max_concurrent_activities"] = max_activities
+
     worker = Worker(
         client,
-        task_queue=settings.temporal_task_queue,
-        workflows=[FeatureWorkflow],
-        activities=[create_worktree, remove_worktree, run_command],
+        task_queue=task_queue,
+        workflows=workflows,
+        activities=activities,
+        **worker_kwargs,
     )
     await worker.run()
 
 
 def main() -> None:
-    asyncio.run(run())
+    parser = argparse.ArgumentParser(prog="pravi.worker")
+    parser.add_argument(
+        "--queue",
+        choices=["features", "llm"],
+        default="features",
+        help="Which task-queue pool this worker serves (default: features).",
+    )
+    parser.add_argument(
+        "--max-activities",
+        type=int,
+        default=None,
+        help="Cap concurrent activity executions (recommended for --queue llm).",
+    )
+    args = parser.parse_args()
+    try:
+        asyncio.run(run(args.queue, args.max_activities))
+    except KeyboardInterrupt:
+        log.info("worker.stopped")
 
 
 if __name__ == "__main__":

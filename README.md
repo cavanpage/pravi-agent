@@ -31,29 +31,46 @@ full implementation plan.
 
 ```bash
 # Install
-uv sync
+uv sync --extra dev
 
 # Bring up Postgres + Temporal locally
 docker compose up -d
 
+# One-time: register pravi's custom Temporal search attributes
+./scripts/setup-temporal.sh
+
 # Apply DB migrations
-uv run alembic revision --autogenerate -m "initial"
 uv run alembic upgrade head
 
-# In one terminal: run the Temporal worker
+# In one terminal: run the features worker (default queue)
 uv run python -m pravi.worker
+# OR run an LLM-pool worker with a hard concurrency cap (Slice 1+):
+#   uv run python -m pravi.worker --queue llm --max-activities 4
 
 # In another: kick a smoke workflow against blissful-infra
-cp .env.example .env  # edit PRAVI_TARGET_REPOS if needed
+cp .env.example .env
 uv run pravi ticket run --fake \
   --repo /Users/cavanpage/repos/blissful-infra \
   --domains-file ./examples/blissful-infra-domains.yaml \
-  --domain shared
+  --domain shared --base-ref dev
 ```
 
 This creates a worktree of blissful-infra at `~/.pravi/worktrees/<ticket-id>`,
-runs `npm run test -w packages/shared` inside it, and tears the worktree down.
-Open the Temporal UI at <http://localhost:8233> to watch.
+runs the domain's test command inside it, and tears the worktree down. Open
+the Temporal UI at <http://localhost:8233> to watch. You can also filter
+workflows in the UI by `RepoName`, `Domain`, `TicketId`, or `PraviStatus`.
+
+## Temporal organization
+
+- **Two task queues**: `pravi-features` (orchestration + cheap git/github
+  activities) and `pravi-llm` (token-burning activities, capped concurrency).
+  The dev activity (Slice 1+) routes to `pravi-llm`.
+- **Workflow IDs**: `feature-<repo-slug>-<ticket-id>` (e.g.
+  `feature-blissful-infra-42`). Uses `ALLOW_DUPLICATE_FAILED_ONLY` reuse
+  policy — re-running a ticket only succeeds if the prior run failed.
+- **Search attributes**: `RepoName`, `Domain`, `TicketId`, `PraviStatus` are
+  attached to every workflow for UI filtering. Registered by
+  `./scripts/setup-temporal.sh`.
 
 ## Layout
 

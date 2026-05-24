@@ -14,7 +14,12 @@ class Settings(BaseSettings):
     db_url: str = "postgresql+asyncpg://pravi:pravi@localhost:5433/pravi"
     temporal_host: str = "localhost:7233"
     temporal_namespace: str = "default"
-    temporal_task_queue: str = "pravi-features"
+    # Task queue split — see scripts/setup-temporal.sh and README for rationale.
+    # `features` carries orchestration + cheap activities (git, github).
+    # `llm`      carries token-burning activities; cap concurrency on the worker
+    #            with --max-activities to bound spend.
+    temporal_task_queue_features: str = "pravi-features"
+    temporal_task_queue_llm: str = "pravi-llm"
     worktree_base: Path = Field(default=Path.home() / ".pravi" / "worktrees")
     target_repos: list[Path] = Field(default_factory=list)
     log_level: str = "INFO"

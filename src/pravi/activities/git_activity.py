@@ -72,26 +72,36 @@ async def create_worktree(req: WorktreeRequest) -> WorktreeInfo:
 class CleanupRequest:
     repo_path: str
     worktree_path: str
+    delete_branch: str | None = None  # set to delete the branch after worktree removal
 
 
 @activity.defn
 async def remove_worktree(req: CleanupRequest) -> None:
     repo = Path(req.repo_path).expanduser().resolve()
     target = Path(req.worktree_path)
-    if not target.exists():
+    if target.exists():
+        code, out, err = await _run(
+            ["git", "worktree", "remove", "--force", str(target)],
+            cwd=repo,
+        )
+        if code != 0:
+            # Last-resort cleanup so we don't leak directories
+            log.warning("worktree.remove_failed", path=str(target), err=err)
+            shutil.rmtree(target, ignore_errors=True)
+            await _run(["git", "worktree", "prune"], cwd=repo)
+        log.info("worktree.removed", path=str(target))
+    else:
         log.info("worktree.cleanup.missing", path=str(target))
-        return
 
-    code, out, err = await _run(
-        ["git", "worktree", "remove", "--force", str(target)],
-        cwd=repo,
-    )
-    if code != 0:
-        # Last-resort cleanup so we don't leak directories
-        log.warning("worktree.remove_failed", path=str(target), err=err)
-        shutil.rmtree(target, ignore_errors=True)
-        await _run(["git", "worktree", "prune"], cwd=repo)
-    log.info("worktree.removed", path=str(target))
+    if req.delete_branch:
+        code, _, err = await _run(
+            ["git", "branch", "-D", req.delete_branch],
+            cwd=repo,
+        )
+        if code != 0:
+            log.warning("branch.delete_failed", branch=req.delete_branch, err=err.strip())
+        else:
+            log.info("branch.deleted", branch=req.delete_branch)
 
 
 @dataclass
