@@ -342,6 +342,11 @@ async def _plan_flow(
         external_id=external_id, repo=repo
     )
 
+    # Sanity-check the workflow is alive BEFORE spending tokens on the architect.
+    # A cancelled / completed / failed workflow can't accept the signal, and
+    # discovering that after an editor session is needlessly painful.
+    await _assert_workflow_signalable(repo=repo, external_id=external_id)
+
     registry = DomainRegistry.load(repo, override_file=domains_file)
     chosen = registry.get(domain_name) if domain_name else registry.domains[0]
 
@@ -443,6 +448,40 @@ async def _signal_plan_approved(*, repo: Path, external_id: str, plan_id: int) -
     workflow_id = feature_workflow_id(repo, external_id)
     handle = client.get_workflow_handle(workflow_id)
     await handle.signal(FeatureWorkflow.approve_plan, plan_id)
+
+
+async def _assert_workflow_signalable(*, repo: Path, external_id: str) -> None:
+    """Raise typer.Exit if the workflow doesn't exist or has already closed."""
+    settings = get_settings()
+    client = await Client.connect(settings.temporal_host, namespace=settings.temporal_namespace)
+    workflow_id = feature_workflow_id(repo, external_id)
+    try:
+        desc = await client.get_workflow_handle(workflow_id).describe()
+    except RPCError as e:
+        if "NotFound" in str(e) or "not found" in str(e).lower():
+            console.print(
+                f"[red]no workflow with id[/] [bold]{workflow_id}[/]. "
+                f"Run `pravi ticket start {external_id} ...` first."
+            )
+            raise typer.Exit(code=1) from e
+        raise
+    # WorkflowExecutionStatus: 1=RUNNING, 2=COMPLETED, 3=FAILED, 4=CANCELED,
+    # 5=TERMINATED, 6=CONTINUED_AS_NEW, 7=TIMED_OUT
+    status_int = int(desc.status)
+    if status_int != 1:
+        names = {
+            2: "COMPLETED",
+            3: "FAILED",
+            4: "CANCELED",
+            5: "TERMINATED",
+            6: "CONTINUED_AS_NEW",
+            7: "TIMED_OUT",
+        }
+        console.print(
+            f"[red]workflow [bold]{workflow_id}[/] is {names.get(status_int, status_int)}[/] — "
+            f"can't accept signals. Re-run `pravi ticket start {external_id} ...` to start a new run."
+        )
+        raise typer.Exit(code=1)
 
 
 async def _signal_cancel(*, repo: Path, external_id: str) -> None:
