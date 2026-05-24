@@ -1,0 +1,27 @@
+# Example domains.yaml for the blissful-infra pilot target.
+# Once stable, copy this to `/Users/cavanpage/repos/blissful-infra/.builder/domains.yaml`
+# so pravi can find it without an --domains-file override.
+domains:
+  - name: shared
+    paths: ["packages/shared/**"]
+    description: "Shared TypeScript schemas / data models for blissful-infra."
+    test: "npm run test -w packages/shared"
+    build: "npm run build -w packages/shared"
+    context_files: ["packages/shared/README.md"]
+
+  - name: cli
+    paths: ["packages/cli/**"]
+    description: "TypeScript CLI (`@blissful-infra/cli`) for scaffolding/running infra."
+    test: "npm run test -w packages/cli"
+    build: "npm run build -w packages/cli"
+    context_files: ["packages/cli/README.md"]
+
+  - name: dashboard
+    paths: ["packages/dashboard/**"]
+    description: "Vite/React dashboard for blissful-infra."
+    build: "npm run build -w packages/dashboard"
+    context_files: ["packages/dashboard/README.md"]
+
+  - name: docs
+    paths: ["site/**", "docs/**"]
+    description: "Astro/Starlight docs site and Markdown ADRs."
