@@ -1,3 +1,17 @@
+"""Per-ticket FeatureWorkflow — the durable, human-in-the-loop core.
+
+Lifecycle (Slice 1B today; tester/reviewer/PR steps land in 1C/Slice 2):
+
+  1. Load the ticket from Postgres.
+  2. Wait for the architect to send `approve_plan(plan_id)` (signal).
+  3. Load the approved plan.
+  4. Create a per-ticket worktree.
+  5. Run the developer agent with the plan as its task (LLM queue).
+  6. Optionally cleanup. (PR open + reviewer come in 1C / Slice 2.)
+
+Status is exposed via `@workflow.query current_status()` so the CLI can
+introspect from the outside.
+"""
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -7,90 +21,226 @@ from temporalio import workflow
 from temporalio.common import RetryPolicy
 
 with workflow.unsafe.imports_passed_through():
+    from pravi.activities.db_activity import (
+        PlanData,
+        TicketRef,
+        TicketStatusUpdate,
+        load_plan,
+        load_ticket,
+        update_ticket_status,
+    )
+    from pravi.activities.dev_activity import (
+        DevActivityRequest,
+        DevActivityResult,
+        run_dev,
+    )
     from pravi.activities.git_activity import (
         CleanupRequest,
-        RunCommandRequest,
-        RunCommandResult,
         WorktreeInfo,
         WorktreeRequest,
         create_worktree,
         remove_worktree,
-        run_command,
     )
+
+
+# Statuses surfaced via @workflow.query — keep these short, the CLI displays them.
+STATUS_LOADING = "loading_ticket"
+STATUS_WAITING_FOR_PLAN = "waiting_for_plan"
+STATUS_RUNNING_DEV = "running_dev"
+STATUS_DONE = "done"
+STATUS_CANCELLED = "cancelled"
 
 
 @dataclass
 class FeatureWorkflowInput:
-    repo_path: str
-    ticket_id: str
-    branch: str
-    base_ref: str = "main"
-    smoke_command: list[str] | None = None
-    delete_branch_on_cleanup: bool = False
+    ticket_id: int
+    domain_name: str
+    domain_description: str
+    domain_paths: list[str]
+    base_ref: str
+    llm_task_queue: str
+    cleanup_worktree: bool = False
 
 
 @dataclass
 class FeatureWorkflowResult:
-    worktree_path: str
-    smoke_exit_code: int | None
+    ticket_id: int
+    plan_id: int | None
+    worktree_path: str | None
+    branch: str | None
+    dev: DevActivityResult | None
     summary: str
 
 
 @workflow.defn
 class FeatureWorkflow:
-    """Slice 0 skeleton: create worktree, run a smoke command, tear down.
+    def __init__(self) -> None:
+        self._plan_id: int | None = None
+        self._status: str = STATUS_LOADING
+        self._cancel_requested: bool = False
 
-    Future slices will insert the architect-approval signal wait, the dev/test
-    loop, reviewer activity, and PR opening between worktree create and cleanup.
-    """
+    @workflow.signal
+    async def approve_plan(self, plan_id: int) -> None:
+        """Architect signals an approved Plan row's ID. Idempotent: first wins."""
+        if self._plan_id is None:
+            self._plan_id = plan_id
+
+    @workflow.signal
+    async def cancel(self) -> None:
+        """Operator escape hatch — bail out of the wait_condition cleanly."""
+        self._cancel_requested = True
+
+    @workflow.query
+    def current_status(self) -> str:
+        return self._status
+
+    @workflow.query
+    def plan_id(self) -> int | None:
+        return self._plan_id
 
     @workflow.run
     async def run(self, inp: FeatureWorkflowInput) -> FeatureWorkflowResult:
+        self._status = STATUS_LOADING
+        ticket: TicketRef = await workflow.execute_activity(
+            load_ticket,
+            inp.ticket_id,
+            start_to_close_timeout=timedelta(seconds=30),
+            retry_policy=RetryPolicy(maximum_attempts=3),
+        )
+        await workflow.execute_activity(
+            update_ticket_status,
+            TicketStatusUpdate(
+                ticket_id=ticket.ticket_id,
+                status="planning",
+                workflow_id=workflow.info().workflow_id,
+            ),
+            start_to_close_timeout=timedelta(seconds=30),
+            retry_policy=RetryPolicy(maximum_attempts=3),
+        )
+
+        # Block until the architect sends approve_plan(plan_id) — or cancel.
+        self._status = STATUS_WAITING_FOR_PLAN
+        await workflow.wait_condition(
+            lambda: self._plan_id is not None or self._cancel_requested
+        )
+
+        if self._cancel_requested:
+            self._status = STATUS_CANCELLED
+            await workflow.execute_activity(
+                update_ticket_status,
+                TicketStatusUpdate(ticket_id=ticket.ticket_id, status="cancelled"),
+                start_to_close_timeout=timedelta(seconds=30),
+                retry_policy=RetryPolicy(maximum_attempts=3),
+            )
+            return FeatureWorkflowResult(
+                ticket_id=ticket.ticket_id,
+                plan_id=None,
+                worktree_path=None,
+                branch=None,
+                dev=None,
+                summary="cancelled before plan",
+            )
+
+        plan: PlanData = await workflow.execute_activity(
+            load_plan,
+            self._plan_id,
+            start_to_close_timeout=timedelta(seconds=30),
+            retry_policy=RetryPolicy(maximum_attempts=3),
+        )
+
+        await workflow.execute_activity(
+            update_ticket_status,
+            TicketStatusUpdate(
+                ticket_id=ticket.ticket_id, status="plan_approved"
+            ),
+            start_to_close_timeout=timedelta(seconds=30),
+            retry_policy=RetryPolicy(maximum_attempts=3),
+        )
+
+        self._status = STATUS_RUNNING_DEV
+        branch = f"pravi/{ticket.external_id}-{plan.domain_name}"
         wt: WorktreeInfo = await workflow.execute_activity(
             create_worktree,
             WorktreeRequest(
-                repo_path=inp.repo_path,
-                ticket_id=inp.ticket_id,
-                branch=inp.branch,
+                repo_path=ticket.repo_local_path,
+                ticket_id=str(ticket.external_id),
+                branch=branch,
                 base_ref=inp.base_ref,
             ),
             start_to_close_timeout=timedelta(minutes=2),
             retry_policy=RetryPolicy(maximum_attempts=2),
         )
 
-        smoke_exit: int | None = None
+        dev_result: DevActivityResult | None = None
         try:
-            if inp.smoke_command:
-                result: RunCommandResult = await workflow.execute_activity(
-                    run_command,
-                    RunCommandRequest(
-                        cwd=wt.path,
-                        command=inp.smoke_command,
-                        timeout_seconds=600,
-                    ),
-                    start_to_close_timeout=timedelta(minutes=15),
-                    retry_policy=RetryPolicy(maximum_attempts=1),
-                )
-                smoke_exit = result.exit_code
-        finally:
             await workflow.execute_activity(
-                remove_worktree,
-                CleanupRequest(
-                    repo_path=inp.repo_path,
-                    worktree_path=wt.path,
-                    delete_branch=wt.branch if inp.delete_branch_on_cleanup else None,
-                ),
-                start_to_close_timeout=timedelta(minutes=2),
+                update_ticket_status,
+                TicketStatusUpdate(ticket_id=ticket.ticket_id, status="in_progress"),
+                start_to_close_timeout=timedelta(seconds=30),
                 retry_policy=RetryPolicy(maximum_attempts=3),
             )
 
-        summary = (
-            f"worktree={wt.path} branch={wt.branch} smoke_exit={smoke_exit}"
-            if inp.smoke_command
-            else f"worktree={wt.path} branch={wt.branch} (no smoke command)"
+            dev_req = DevActivityRequest(
+                repo_path=ticket.repo_local_path,
+                repo_name=ticket.repo_name,
+                worktree_path=wt.path,
+                domain_name=plan.domain_name,
+                domain_description=inp.domain_description,
+                domain_paths=list(inp.domain_paths),
+                task=_build_dev_task(ticket=ticket, plan=plan),
+            )
+            dev_result = await workflow.execute_activity(
+                run_dev,
+                dev_req,
+                task_queue=inp.llm_task_queue,
+                start_to_close_timeout=timedelta(hours=1),
+                heartbeat_timeout=timedelta(minutes=2),
+                retry_policy=RetryPolicy(maximum_attempts=1),
+            )
+        finally:
+            if inp.cleanup_worktree:
+                await workflow.execute_activity(
+                    remove_worktree,
+                    CleanupRequest(
+                        repo_path=ticket.repo_local_path,
+                        worktree_path=wt.path,
+                        delete_branch=None,
+                    ),
+                    start_to_close_timeout=timedelta(minutes=2),
+                    retry_policy=RetryPolicy(maximum_attempts=3),
+                )
+
+        final_status = "failed" if (dev_result and not dev_result.success) else "pr_open"
+        await workflow.execute_activity(
+            update_ticket_status,
+            TicketStatusUpdate(ticket_id=ticket.ticket_id, status=final_status),
+            start_to_close_timeout=timedelta(seconds=30),
+            retry_policy=RetryPolicy(maximum_attempts=3),
         )
+        self._status = STATUS_DONE
+
         return FeatureWorkflowResult(
+            ticket_id=ticket.ticket_id,
+            plan_id=plan.plan_id,
             worktree_path=wt.path,
-            smoke_exit_code=smoke_exit,
-            summary=summary,
+            branch=wt.branch,
+            dev=dev_result,
+            summary=(dev_result.summary if dev_result else "no dev result"),
         )
+
+
+def _build_dev_task(*, ticket: TicketRef, plan: PlanData) -> str:
+    """Compose the user prompt the dev agent receives.
+
+    The plan is authoritative — the ticket is included for traceability.
+    """
+    return (
+        f"# Ticket: {ticket.title}\n\n"
+        f"External ID: {ticket.external_id}\n\n"
+        f"{ticket.body or '(no description)'}\n\n"
+        f"---\n\n"
+        f"# Approved plan\n\n"
+        f"{plan.content_md}\n\n"
+        f"---\n\n"
+        f"Implement the plan above. Stay inside the domain's allowed paths."
+    )

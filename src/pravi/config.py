@@ -24,6 +24,12 @@ class Settings(BaseSettings):
     target_repos: list[Path] = Field(default_factory=list)
     log_level: str = "INFO"
 
+    # Claude / agent budgets (per dev_activity run).
+    anthropic_api_key: str | None = None
+    dev_max_wall_seconds: int = 1800  # Temporal-side timeout for a single dev run
+    dev_max_turns: int = 50  # SDK-side cap on agent iterations
+    dev_max_cost_usd: float = 5.0  # SDK-side hard budget per run
+
     @property
     def worktree_base_resolved(self) -> Path:
         return self.worktree_base.expanduser().resolve()

@@ -2,7 +2,7 @@
 
 Agentic feature builder for domain-driven repos, powered by Claude.
 
-**Status:** Slice 0 — end-to-end skeleton (worktree create / smoke command / cleanup over Temporal).
+**Status:** Slice 1B — architect drafts plans (read-only Claude), human approves via `$EDITOR`, FeatureWorkflow signal/wait pattern wires plan → dev. Tickets + plans persist in Postgres.
 
 ## What it is
 
@@ -42,23 +42,91 @@ docker compose up -d
 # Apply DB migrations
 uv run alembic upgrade head
 
-# In one terminal: run the features worker (default queue)
-uv run python -m pravi.worker
-# OR run an LLM-pool worker with a hard concurrency cap (Slice 1+):
-#   uv run python -m pravi.worker --queue llm --max-activities 4
+# Authentication for Claude: either ANTHROPIC_API_KEY in .env,
+# or be logged in via Claude Code (the SDK shells out to the local `claude` CLI).
 
-# In another: kick a smoke workflow against blissful-infra
+# In one terminal: run the features worker (workflow orchestration + git/github)
+uv run python -m pravi.worker --queue features
+
+# In another: run the LLM worker (caps concurrent dev-agent runs at $$$)
+uv run python -m pravi.worker --queue llm --max-activities 2
+
+# In a third: kick a smoke workflow against blissful-infra
 cp .env.example .env
 uv run pravi ticket run --fake \
   --repo /Users/cavanpage/repos/blissful-infra \
   --domains-file ./examples/blissful-infra-domains.yaml \
-  --domain shared --base-ref dev
+  --domain shared --base-ref dev \
+  --smoke-command "git rev-parse --abbrev-ref HEAD"
 ```
 
 This creates a worktree of blissful-infra at `~/.pravi/worktrees/<ticket-id>`,
-runs the domain's test command inside it, and tears the worktree down. Open
-the Temporal UI at <http://localhost:8233> to watch. You can also filter
-workflows in the UI by `RepoName`, `Domain`, `TicketId`, or `PraviStatus`.
+runs the smoke command inside it, and tears the worktree down (the branch is
+also removed for `--fake` runs). Open the Temporal UI at <http://localhost:8233>
+to watch. You can also filter workflows in the UI by `RepoName`, `Domain`,
+`TicketId`, or `PraviStatus`.
+
+## Run the dev agent (Slice 1A)
+
+`pravi dev` spins up a worktree, runs the claude-agent-sdk developer agent
+against the requested task, and keeps the worktree for you to inspect:
+
+```bash
+uv run pravi dev "Create a file packages/shared/HELLO.md with one line 'hi'" \
+  --repo /Users/cavanpage/repos/blissful-infra \
+  --domains-file ./examples/blissful-infra-domains.yaml \
+  --domain shared --base-ref dev
+# prints: ✓ success  turns=2  duration=4.7s  cost=$0.13
+# worktree preserved: ~/.pravi/worktrees/dev-<uuid>
+#   inspect with: cd ... && git diff dev
+
+# add --cleanup to tear down worktree + branch when done
+uv run pravi dev "..." --cleanup ...
+```
+
+The dev activity runs on the **LLM queue** so its concurrency is capped by
+`--max-activities` on the LLM worker. Per-run hard limits (wall clock, turns,
+$ budget) come from `PRAVI_DEV_MAX_*` env vars — see `.env.example`.
+
+## Full ticket lifecycle (Slice 1B)
+
+Two commands, intentionally separated so the workflow visibly pauses for
+human approval:
+
+```bash
+# T1 — start a ticket; workflow blocks waiting for an approved plan
+uv run pravi ticket start TEST-001 \
+  --title "Add a greeting README to shared" \
+  --body "Create packages/shared/HELLO.md with a one-line greeting." \
+  --repo /Users/cavanpage/repos/blissful-infra \
+  --domain shared --base-ref dev \
+  --domains-file ./examples/blissful-infra-domains.yaml \
+  --detach    # exit; workflow stays running in the worker
+
+# T2 — architect drafts a plan, opens $EDITOR, approve/revise/cancel,
+#       persists Plan row, signals the workflow with plan_id
+uv run pravi plan TEST-001 \
+  --repo /Users/cavanpage/repos/blissful-infra \
+  --domains-file ./examples/blissful-infra-domains.yaml
+# or skip the editor for scripted runs:
+uv run pravi plan TEST-001 --no-editor ...
+```
+
+What happens:
+1. `ticket start` creates `Repo`+`Ticket` rows and launches
+   `FeatureWorkflow`, which immediately blocks on
+   `workflow.wait_condition(plan_id is not None)`.
+2. `pravi plan` runs the **architect agent** (Claude, read-only — only
+   `Read`/`Grep`/`Glob`/`WebFetch`), drafts a structured Markdown plan with
+   Summary / Approach / Changes / Tests / Risks, opens it in `$EDITOR`,
+   prompts to approve/revise/cancel.
+3. On approve: writes `Plan` row, sends `approve_plan(plan_id)` signal.
+4. Workflow wakes, loads the plan, creates a worktree, runs the dev agent
+   on the LLM queue with the plan as the task, updates ticket status
+   through `planning → plan_approved → in_progress → pr_open`.
+
+Watch any of it via the workflow's `@workflow.query current_status()` —
+the CLI tails it when run without `--detach`.
 
 ## Temporal organization
 
@@ -76,15 +144,15 @@ workflows in the UI by `RepoName`, `Domain`, `TicketId`, or `PraviStatus`.
 
 ```
 src/pravi/
-├── cli/         # Typer entrypoint (`pravi`)
-├── workflows/   # Temporal workflows (deterministic)
-├── activities/  # Temporal activities (I/O, subprocesses)
-├── sdk_runner/  # (Slice 1+) claude-agent-sdk wrapper
-├── agents/      # (Slice 1+) LangGraph graphs per role
+├── cli/         # Typer: ticket run/start/list-domains, plan, dev
+├── workflows/   # Temporal: SmokeWorkflow, DevWorkflow, FeatureWorkflow
+├── activities/  # git, dev (claude-agent-sdk), db (ticket/plan I/O)
+├── sdk_runner/  # claude-agent-sdk wrapper with heartbeats + budget guardrails
+├── agents/      # architect (read-only Claude call); reviewer in Slice 2
 ├── domains/     # `.builder/domains.yaml` loader
-├── prompts/     # (Slice 1+) versioned prompts
+├── prompts/     # versioned prompts: dev/v1, architect/v1
 ├── events/      # (Slice 2+) typed event bus
 ├── db/          # SQLAlchemy models + Alembic
-├── tools/       # (Slice 1+) shared LangGraph tools
+├── tools/       # (Slice 2+) shared LangGraph tools
 └── config.py
 ```

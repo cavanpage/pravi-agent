@@ -19,6 +19,7 @@ dependencies = [
     "structlog>=24.1.0",
     "python-dotenv>=1.0.0",
     "anyio>=4.4.0",
+    "claude-agent-sdk>=0.2.87",
 ]
 
 [project.optional-dependencies]
@@ -43,6 +44,7 @@ packages = ["src/pravi"]
 [tool.ruff]
 line-length = 100
 target-version = "py311"
+extend-exclude = ["src/pravi/db/migrations/versions"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "B", "UP", "W"]

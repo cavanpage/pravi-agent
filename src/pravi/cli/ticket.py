@@ -26,10 +26,10 @@ from pravi.temporal_utils import (
     feature_workflow_id,
     repo_slug,
 )
-from pravi.workflows.feature_workflow import (
-    FeatureWorkflow,
-    FeatureWorkflowInput,
-    FeatureWorkflowResult,
+from pravi.workflows.smoke_workflow import (
+    SmokeWorkflow,
+    SmokeWorkflowInput,
+    SmokeWorkflowResult,
 )
 
 app = typer.Typer(help="Manage feature tickets.", no_args_is_help=True)
@@ -102,7 +102,7 @@ def run_ticket(
     branch = f"pravi/{tid}-{chosen.name}"
 
     is_fake_run = tid.startswith("fake-")
-    inp = FeatureWorkflowInput(
+    inp = SmokeWorkflowInput(
         repo_path=str(repo),
         ticket_id=tid,
         branch=branch,
@@ -111,7 +111,7 @@ def run_ticket(
         delete_branch_on_cleanup=is_fake_run,
     )
 
-    workflow_id = feature_workflow_id(repo, tid)
+    workflow_id = f"smoke-{feature_workflow_id(repo, tid)}"
     console.print(
         f"[bold]pravi[/] starting workflow for ticket [cyan]{tid}[/] "
         f"on domain [magenta]{chosen.name}[/] (repo: {repo})"
@@ -135,14 +135,14 @@ def run_ticket(
 
 
 async def _run_workflow(
-    inp: FeatureWorkflowInput,
+    inp: SmokeWorkflowInput,
     workflow_id: str,
     domain_name: str,
-) -> FeatureWorkflowResult:
+) -> SmokeWorkflowResult:
     settings = get_settings()
     client = await Client.connect(settings.temporal_host, namespace=settings.temporal_namespace)
     handle = await client.start_workflow(
-        FeatureWorkflow.run,
+        SmokeWorkflow.run,
         inp,
         id=workflow_id,
         task_queue=settings.temporal_task_queue_features,
@@ -152,7 +152,7 @@ async def _run_workflow(
                 SearchAttributePair(REPO_NAME, repo_slug(inp.repo_path)),
                 SearchAttributePair(DOMAIN, domain_name),
                 SearchAttributePair(TICKET_ID, inp.ticket_id),
-                SearchAttributePair(PRAVI_STATUS, "running"),
+                SearchAttributePair(PRAVI_STATUS, "smoke"),
             ]
         ),
     )
