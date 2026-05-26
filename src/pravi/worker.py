@@ -11,7 +11,8 @@ from temporalio.worker import Worker
 from pravi.activities.db_activity import load_plan, load_ticket, update_ticket_status
 from pravi.activities.dev_activity import run_dev
 from pravi.activities.git_activity import create_worktree, remove_worktree, run_command
-from pravi.config import get_settings
+from pravi.activities.pr_activity import push_and_open_pr
+from pravi.config import apply_anthropic_auth, get_settings
 from pravi.logging_setup import configure_logging
 from pravi.workflows.dev_workflow import DevWorkflow
 from pravi.workflows.feature_workflow import FeatureWorkflow
@@ -44,6 +45,7 @@ def _resolve_queue(queue: Queue) -> tuple[str, list, list]:
                 load_ticket,
                 load_plan,
                 update_ticket_status,
+                push_and_open_pr,
             ],
         )
     if queue == "llm":
@@ -54,6 +56,10 @@ def _resolve_queue(queue: Queue) -> tuple[str, list, list]:
 async def run(queue: Queue, max_activities: int | None) -> None:
     settings = get_settings()
     configure_logging(settings.log_level)
+    # Only the LLM worker actually invokes the SDK — but apply to both for
+    # consistency, since `claude` activity callers may run on the features
+    # pool in the future (e.g. tester/reviewer agents).
+    apply_anthropic_auth()
     client = await Client.connect(settings.temporal_host, namespace=settings.temporal_namespace)
     task_queue, workflows, activities = _resolve_queue(queue)
 

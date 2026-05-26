@@ -4,7 +4,9 @@ from __future__ import annotations
 
 from textwrap import dedent
 
-VERSION = "architect/v1"
+# Bumped to v2 when adding the `context_block` parameter so non-Claude
+# architects can pre-pack file context into the prompt.
+VERSION = "architect/v2"
 
 
 def system_prompt(
@@ -14,8 +16,22 @@ def system_prompt(
     domain_description: str,
     domain_paths: list[str],
     cwd: str,
+    can_browse: bool = True,
 ) -> str:
+    """The system prompt.
+
+    `can_browse=True` (default) is for backends that can call Read/Grep/Glob
+    tools (e.g. Claude). `can_browse=False` is for one-shot LLM calls where
+    context is pre-packed into the user prompt — the rules change to
+    "use what you've been given; don't ask for more".
+    """
     paths_block = "\n".join(f"  - {p}" for p in domain_paths)
+    browse_rule = (
+        "You may READ files for context. You may NOT modify anything."
+        if can_browse
+        else "Context files have been pre-packed into the user message. Do not "
+        "ask for more files; reason from what's there. You cannot modify anything."
+    )
     return dedent(
         f"""
         You are the architect agent for pravi. Your job is to draft a small,
@@ -30,7 +46,7 @@ def system_prompt(
         Repo root (read-only access): {cwd}
 
         Rules:
-          - You may READ files for context. You may NOT modify anything.
+          - {browse_rule}
           - Stay inside the listed domain paths when proposing changes.
           - If the ticket spans multiple domains, say so explicitly and
             recommend splitting; do not paper over it.
@@ -66,15 +82,25 @@ def system_prompt(
     ).strip()
 
 
-def user_prompt(*, ticket_title: str, ticket_body: str) -> str:
+def user_prompt(
+    *,
+    ticket_title: str,
+    ticket_body: str,
+    context_block: str | None = None,
+) -> str:
     body_block = ticket_body.strip() if ticket_body and ticket_body.strip() else "(no description)"
-    return dedent(
-        f"""
-        Ticket title: {ticket_title}
-
-        Ticket description:
-        {body_block}
-
-        Read whatever files you need for context, then produce the plan.
-        """
-    ).strip()
+    tail = (
+        "Read whatever files you need for context, then produce the plan."
+        if context_block is None
+        else "Reason from the context above and produce the plan."
+    )
+    parts = [
+        f"Ticket title: {ticket_title}",
+        "",
+        "Ticket description:",
+        body_block,
+    ]
+    if context_block:
+        parts.extend(["", "---", "", context_block.strip(), "", "---"])
+    parts.extend(["", tail])
+    return "\n".join(parts)

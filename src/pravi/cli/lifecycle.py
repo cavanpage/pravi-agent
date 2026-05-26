@@ -27,7 +27,8 @@ from temporalio.common import (
 )
 from temporalio.service import RPCError
 
-from pravi.agents.architect import ArchitectRequest, draft_plan
+from pravi.agents.factory import get_architect
+from pravi.agents.protocols import ArchitectRequest
 from pravi.cli.plan_editor import edit_plan
 from pravi.config import get_settings
 from pravi.db.models import Plan, Repo, Ticket, TicketStatus
@@ -212,9 +213,12 @@ async def _ticket_start_flow(
         f"(db id={ticket_id})  domain=[magenta]{chosen_name}[/]  repo={repo}"
     )
     console.print(f"workflow id: [dim]{workflow_id}[/]")
+    web_url = f"{get_settings().web_url_base.rstrip('/')}/tickets/{external_id}"
     console.print(
-        f"[yellow]waiting for plan approval[/] — run "
-        f"[bold]pravi plan {external_id} --repo {repo}[/] in another terminal"
+        f"[yellow]waiting for plan approval[/]\n"
+        f"  web UI: [bold]{web_url}[/]   "
+        f"[dim](needs `pravi web` running)[/]\n"
+        f"  CLI:    [bold]pravi plan {external_id} --repo {repo}[/]"
     )
 
     await _start_and_optionally_wait(
@@ -354,6 +358,7 @@ async def _plan_flow(
         f"[bold]drafting plan[/] for ticket [cyan]{external_id}[/] "
         f"(domain=[magenta]{chosen.name}[/])"
     )
+    settings = get_settings()
     arch_req = ArchitectRequest(
         repo_path=str(repo),
         repo_name=repo.name,
@@ -362,8 +367,12 @@ async def _plan_flow(
         domain_paths=list(chosen.paths),
         ticket_title=ticket_title,
         ticket_body=ticket_body,
+        domain_context_files=list(chosen.context_files),
+        max_wall_seconds=settings.architect_max_wall_seconds,
+        max_turns=settings.architect_max_turns,
+        max_cost_usd=settings.architect_max_cost_usd,
     )
-    arch_result = await draft_plan(arch_req)
+    arch_result = await get_architect().draft_plan(arch_req)
     if not arch_result.success:
         console.print(f"[red]architect failed:[/] {'; '.join(arch_result.errors)}")
         raise typer.Exit(code=1)

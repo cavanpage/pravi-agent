@@ -3,7 +3,19 @@ from __future__ import annotations
 from datetime import datetime
 from enum import StrEnum
 
-from sqlalchemy import JSON, BigInteger, DateTime, ForeignKey, String, Text, func
+from sqlalchemy import (
+    JSON,
+    BigInteger,
+    CheckConstraint,
+    DateTime,
+    Float,
+    ForeignKey,
+    Index,
+    String,
+    Text,
+    UniqueConstraint,
+    func,
+)
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 
@@ -34,6 +46,23 @@ class TicketStatus(StrEnum):
     cancelled = "cancelled"
 
 
+class TicketKind(StrEnum):
+    """Three-level hierarchy: Epic > Feature > Task.
+
+    - **Epic**: top-level container (no parent). Holds high-level intent.
+    - **Feature**: child of an Epic. Groups related tasks.
+    - **Task**: leaf; the unit that runs a FeatureWorkflow. Parent is a
+      Feature (or None for standalone tasks).
+
+    Only tasks execute today; epics + features are organizational. (Auto-
+    decomposition workflow for epics lands in a follow-up slice.)
+    """
+
+    epic = "epic"
+    feature = "feature"
+    task = "task"
+
+
 class Repo(Base, TimestampMixin):
     __tablename__ = "repos"
 
@@ -61,10 +90,154 @@ class Ticket(Base, TimestampMixin):
     workflow_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
     pr_number: Mapped[int | None] = mapped_column(nullable=True)
 
+    # Hierarchy. `kind` defaults to "task" so existing rows are unaffected by
+    # the migration. `parent_id` is nullable: epics never have one, features
+    # always do, tasks may (standalone) or may not.
+    kind: Mapped[TicketKind] = mapped_column(
+        String(16), default=TicketKind.task, nullable=False
+    )
+    parent_id: Mapped[int | None] = mapped_column(
+        ForeignKey("tickets.id", ondelete="SET NULL"), nullable=True
+    )
+    # Cumulative spend cap (USD). Null = inherit from parent → env default →
+    # unlimited. Enforced pre-flight before each dev run; the SDK's per-run
+    # cap is also clamped to the remaining budget so a single run can't
+    # blow through the ceiling.
+    cost_ceiling_usd: Mapped[float | None] = mapped_column(Float, nullable=True)
+
     repo: Mapped[Repo] = relationship(back_populates="tickets")
     plans: Mapped[list[Plan]] = relationship(back_populates="ticket")
     runs: Mapped[list[Run]] = relationship(back_populates="ticket")
     events: Mapped[list[Event]] = relationship(back_populates="ticket")
+
+    parent: Mapped[Ticket | None] = relationship(
+        "Ticket",
+        remote_side="Ticket.id",
+        back_populates="children",
+        foreign_keys=[parent_id],
+    )
+    children: Mapped[list[Ticket]] = relationship(
+        "Ticket",
+        back_populates="parent",
+        foreign_keys=[parent_id],
+    )
+
+    __table_args__ = (
+        Index("ix_tickets_parent_id", "parent_id"),
+        Index("ix_tickets_repo_id_kind", "repo_id", "kind"),
+    )
+
+
+class GitHubConnection(Base, TimestampMixin):
+    """Persisted OAuth token for talking to GitHub on the user's behalf.
+
+    Single-user local dev: we keep the latest non-revoked row and treat it
+    as "the connection". Logout sets `revoked_at`. A re-auth inserts a fresh
+    row rather than mutating the existing one, so we have an audit trail
+    if anything weird happens (you got a 401, you re-auth, you see two
+    rows — the new one is active).
+    """
+
+    __tablename__ = "github_connections"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    access_token: Mapped[str] = mapped_column(Text, nullable=False)
+    # GitHub returns these as a space-separated string in the OAuth response.
+    scopes: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    github_user_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    github_user_login: Mapped[str] = mapped_column(String(255), nullable=False)
+    github_user_avatar_url: Mapped[str | None] = mapped_column(Text, nullable=True)
+    revoked_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
+    __table_args__ = (
+        # Latest-non-revoked lookup is the hot path.
+        Index("ix_github_connections_revoked_at_id", "revoked_at", "id"),
+    )
+
+
+class ClarifyStatus(StrEnum):
+    pending = "pending"
+    running = "running"
+    done = "done"
+    failed = "failed"
+
+
+class Clarification(Base, TimestampMixin):
+    """Persistent record of one architect 'clarify' call for an epic.
+
+    Stored in DB (rather than streamed-and-forgotten) so the user can close
+    the tab, navigate away, or even reload the page while the architect is
+    thinking. The latest row per ticket is what the UI displays; re-clarifying
+    inserts a fresh row.
+
+    `raw_md` is updated incrementally as the architect streams tokens — the
+    UI partial-parses it for progressive display while polling.
+    """
+
+    __tablename__ = "clarifications"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    ticket_id: Mapped[int] = mapped_column(
+        ForeignKey("tickets.id", ondelete="CASCADE"), nullable=False
+    )
+    status: Mapped[ClarifyStatus] = mapped_column(
+        String(16), default=ClarifyStatus.pending, nullable=False
+    )
+    raw_md: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    # Parsed question list once status=done. `[{text, why}]`.
+    questions: Mapped[list] = mapped_column(JSON, default=list, nullable=False)
+    prompt_version: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    num_turns: Mapped[int | None] = mapped_column(nullable=True)
+    duration_ms: Mapped[int | None] = mapped_column(nullable=True)
+    total_cost_usd: Mapped[float | None] = mapped_column(Float, nullable=True)
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    started_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    completed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
+    __table_args__ = (
+        # "Latest clarification for ticket" query — descending id is server's
+        # tiebreaker since `created_at` resolution is sub-second.
+        Index("ix_clarifications_ticket_id_id", "ticket_id", "id"),
+    )
+
+
+class FeatureDependency(Base):
+    """`dependent_id` depends on `prerequisite_id` — both must be features
+    under the same epic. Enforced at the application layer (the schema only
+    enforces they're tickets); cycles are rejected at insert time.
+
+    Used by the roadmap view: a topological sort groups features into
+    "waves" where each wave's features can be worked on in parallel and
+    later waves require earlier ones to be done.
+    """
+
+    __tablename__ = "feature_dependencies"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    dependent_id: Mapped[int] = mapped_column(
+        ForeignKey("tickets.id", ondelete="CASCADE"), nullable=False
+    )
+    prerequisite_id: Mapped[int] = mapped_column(
+        ForeignKey("tickets.id", ondelete="CASCADE"), nullable=False
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+    __table_args__ = (
+        UniqueConstraint("dependent_id", "prerequisite_id", name="uq_feature_dep"),
+        CheckConstraint(
+            "dependent_id <> prerequisite_id", name="ck_feature_dep_no_self"
+        ),
+        Index("ix_feature_deps_dependent", "dependent_id"),
+        Index("ix_feature_deps_prerequisite", "prerequisite_id"),
+    )
 
 
 class Plan(Base, TimestampMixin):
@@ -122,6 +295,8 @@ class Event(Base):
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
     ticket_id: Mapped[int] = mapped_column(ForeignKey("tickets.id"), nullable=False)
+    # Null for events not tied to a specific agent run (lifecycle events, etc.).
+    run_id: Mapped[int | None] = mapped_column(ForeignKey("runs.id"), nullable=True)
     at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
@@ -130,3 +305,10 @@ class Event(Base):
     payload: Mapped[dict | None] = mapped_column(JSON, nullable=True)
 
     ticket: Mapped[Ticket] = relationship(back_populates="events")
+
+    __table_args__ = (
+        # Replay queries hit this — "give me events for this ticket since id X".
+        Index("ix_events_ticket_id_id", "ticket_id", "id"),
+        # Per-run timeline view in the UI.
+        Index("ix_events_run_id_id", "run_id", "id"),
+    )

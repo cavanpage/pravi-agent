@@ -4,10 +4,11 @@ Workflows never touch the DB directly — they hold IDs and call into these.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import structlog
 from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 from temporalio import activity
 
 from pravi.db.models import Plan, Repo, Ticket, TicketStatus
@@ -17,8 +18,23 @@ log = structlog.get_logger(__name__)
 
 
 @dataclass
+class AncestorRef:
+    """A parent or grandparent ticket — used to merge into the architect prompt."""
+
+    external_id: str
+    title: str
+    body: str
+    kind: str  # epic | feature | task
+
+
+@dataclass
 class TicketRef:
-    """Lightweight snapshot of a Ticket — what the workflow needs to run."""
+    """Lightweight snapshot of a Ticket — what the workflow needs to run.
+
+    `ancestral_body_md` is the task body with parent + grandparent context
+    prepended; the architect uses it instead of `body` for hierarchical
+    tickets. For standalone (parentless) tickets it equals `body`.
+    """
 
     ticket_id: int
     repo_id: int
@@ -28,6 +44,10 @@ class TicketRef:
     title: str
     body: str
     domain_name: str | None
+    kind: str = "task"
+    parent_id: int | None = None
+    ancestors: list[AncestorRef] = field(default_factory=list)
+    ancestral_body_md: str = ""
 
 
 @dataclass
@@ -36,6 +56,55 @@ class PlanData:
     ticket_id: int
     domain_name: str
     content_md: str
+
+
+async def _load_ancestors(session: AsyncSession, ticket: Ticket) -> list[AncestorRef]:
+    """Walk parent chain from `ticket` upward to root; return root-first."""
+    chain: list[AncestorRef] = []
+    seen: set[int] = {ticket.id}
+    cursor = ticket
+    while cursor.parent_id is not None:
+        if cursor.parent_id in seen:
+            log.warning("ticket.cycle_detected", ticket_id=ticket.id)
+            break
+        seen.add(cursor.parent_id)
+        parent = await session.get(Ticket, cursor.parent_id)
+        if parent is None:
+            break
+        chain.append(
+            AncestorRef(
+                external_id=parent.external_id,
+                title=parent.title,
+                body=parent.body or "",
+                kind=str(parent.kind),
+            )
+        )
+        cursor = parent
+    chain.reverse()  # root (epic) first, immediate parent last
+    return chain
+
+
+def build_ancestral_body(
+    ancestors: list[AncestorRef],
+    self_kind: str,
+    self_title: str,
+    self_body: str,
+) -> str:
+    """Concatenate ancestor bodies above the ticket's own body for the architect.
+
+    Format is plain Markdown — each level a heading, then the body. Empty
+    bodies are noted to keep section structure obvious.
+    """
+    if not ancestors:
+        return self_body or ""
+    parts: list[str] = []
+    for a in ancestors:
+        parts.append(f"# {a.kind.capitalize()}: {a.title}")
+        parts.append((a.body or "_(no description)_").strip())
+        parts.append("")
+    parts.append(f"# {self_kind.capitalize()}: {self_title}")
+    parts.append((self_body or "_(no description)_").strip())
+    return "\n".join(parts).strip()
 
 
 @activity.defn
@@ -50,6 +119,13 @@ async def load_ticket(ticket_id: int) -> TicketRef:
         if row is None:
             raise ValueError(f"ticket {ticket_id} not found")
         ticket, repo = row
+        ancestors = await _load_ancestors(session, ticket)
+        merged = build_ancestral_body(
+            ancestors,
+            str(ticket.kind),
+            ticket.title,
+            ticket.body or "",
+        )
         return TicketRef(
             ticket_id=ticket.id,
             repo_id=repo.id,
@@ -59,6 +135,10 @@ async def load_ticket(ticket_id: int) -> TicketRef:
             title=ticket.title,
             body=ticket.body or "",
             domain_name=ticket.domain_name,
+            kind=str(ticket.kind),
+            parent_id=ticket.parent_id,
+            ancestors=ancestors,
+            ancestral_body_md=merged,
         )
 
 

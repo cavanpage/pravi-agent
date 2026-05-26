@@ -2,7 +2,7 @@
 
 Agentic feature builder for domain-driven repos, powered by Claude.
 
-**Status:** Slice 1B — architect drafts plans (read-only Claude), human approves via `$EDITOR`, FeatureWorkflow signal/wait pattern wires plan → dev. Tickets + plans persist in Postgres.
+**Status:** Slice 1B (web) — architect drafts plans, human reviews/edits in a React UI (Markdown editor + live preview), approve/cancel buttons signal a waiting FeatureWorkflow. Live status streams over SSE.
 
 ## What it is
 
@@ -90,26 +90,42 @@ $ budget) come from `PRAVI_DEV_MAX_*` env vars — see `.env.example`.
 
 ## Full ticket lifecycle (Slice 1B)
 
-Two commands, intentionally separated so the workflow visibly pauses for
-human approval:
+The primary surface is the web UI; `pravi plan` CLI is still there for
+scripted runs.
 
 ```bash
-# T1 — start a ticket; workflow blocks waiting for an approved plan
+# T1 — start the API server
+uv run pravi web --port 8765
+
+# T2 — for hot-reload during frontend dev:
+cd web && npm install && npm run dev   # Vite at http://localhost:5173, proxies /api → :8765
+
+# T3 — start a ticket; workflow blocks waiting for an approved plan
 uv run pravi ticket start TEST-001 \
   --title "Add a greeting README to shared" \
   --body "Create packages/shared/HELLO.md with a one-line greeting." \
   --repo /Users/cavanpage/repos/blissful-infra \
   --domain shared --base-ref dev \
   --domains-file ./examples/blissful-infra-domains.yaml \
-  --detach    # exit; workflow stays running in the worker
+  --detach
+```
 
-# T2 — architect drafts a plan, opens $EDITOR, approve/revise/cancel,
-#       persists Plan row, signals the workflow with plan_id
-uv run pravi plan TEST-001 \
+Then open http://localhost:5173/tickets/TEST-001 (or http://localhost:8765/tickets/TEST-001
+if you've run `npm run build`). The page:
+
+- Loads the ticket, shows title / description / current status
+- "Draft plan with architect" button — runs Claude in read-only mode, returns
+  Markdown
+- Split-pane editor: left = textarea, right = rendered preview
+- "Approve & signal workflow" → persists Plan, signals the workflow
+- Live SSE status: `waiting_for_plan` → `running_dev` → `done`
+- "Cancel workflow" — sends the cancel signal
+
+**Fallback CLI** (no editor needed, useful for scripts):
+```bash
+uv run pravi plan TEST-001 --no-editor \
   --repo /Users/cavanpage/repos/blissful-infra \
   --domains-file ./examples/blissful-infra-domains.yaml
-# or skip the editor for scripted runs:
-uv run pravi plan TEST-001 --no-editor ...
 ```
 
 What happens:
@@ -144,7 +160,8 @@ the CLI tails it when run without `--detach`.
 
 ```
 src/pravi/
-├── cli/         # Typer: ticket run/start/list-domains, plan, dev
+├── cli/         # Typer: ticket run/start/list-domains, plan, dev, web
+├── api/         # FastAPI app (REST + SSE) backing the web UI
 ├── workflows/   # Temporal: SmokeWorkflow, DevWorkflow, FeatureWorkflow
 ├── activities/  # git, dev (claude-agent-sdk), db (ticket/plan I/O)
 ├── sdk_runner/  # claude-agent-sdk wrapper with heartbeats + budget guardrails
@@ -155,4 +172,9 @@ src/pravi/
 ├── db/          # SQLAlchemy models + Alembic
 ├── tools/       # (Slice 2+) shared LangGraph tools
 └── config.py
+
+web/             # Vite + React + TS plan-review UI
+├── src/pages/   # HomePage, TicketPlanPage
+├── src/components/  # PlanEditor (split-pane), StatusBadge
+└── src/lib/api.ts   # REST + SSE client (native EventSource)
 ```

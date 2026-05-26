@@ -6,6 +6,7 @@ from pravi.cli import ticket as ticket_cli
 from pravi.cli.dev import dev as dev_cmd
 from pravi.cli.lifecycle import plan as plan_cmd
 from pravi.cli.lifecycle import ticket_start
+from pravi.cli.web import web as web_cmd
 
 app = typer.Typer(
     name="pravi",
@@ -14,7 +15,6 @@ app = typer.Typer(
 )
 
 app.add_typer(ticket_cli.app, name="ticket")
-# `pravi ticket start` belongs under the ticket subapp.
 ticket_cli.app.command(
     "start",
     help="Persist a ticket and start the FeatureWorkflow (blocks on plan signal).",
@@ -25,6 +25,7 @@ app.command(name="dev", help="Run the developer agent against a task in a worktr
 app.command(name="plan", help="Draft a plan, edit in $EDITOR, approve, signal workflow.")(
     plan_cmd
 )
+app.command(name="web", help="Start the pravi web API for the plan-review UI.")(web_cmd)
 
 
 @app.callback()

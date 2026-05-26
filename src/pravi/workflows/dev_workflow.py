@@ -74,6 +74,8 @@ class DevWorkflow:
             domain_description=inp.dev_request.domain_description,
             domain_paths=inp.dev_request.domain_paths,
             task=inp.dev_request.task,
+            # Pass-through: DevWorkflow callers may or may not have a ticket.
+            ticket_id=inp.dev_request.ticket_id,
         )
 
         try:
