@@ -61,7 +61,10 @@ class Settings(BaseSettings):
     # asking) while keeping Opus on decompose/draft where reasoning quality
     # cascades into every downstream task.
     architect_model: str | None = None
-    architect_clarify_model: str | None = None
+    # Clarify defaults to Haiku 4.5 — the questions step is cheap reasoning
+    # and the latency is what users feel most acutely (it gates the rest of
+    # the decompose flow). Override via PRAVI_ARCHITECT_CLARIFY_MODEL.
+    architect_clarify_model: str | None = "claude-haiku-4-5-20251001"
     architect_decompose_model: str | None = None
     architect_draft_model: str | None = None
     architect_max_wall_seconds: int = 300

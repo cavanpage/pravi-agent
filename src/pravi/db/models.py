@@ -89,6 +89,9 @@ class Ticket(Base, TimestampMixin):
     )
     workflow_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
     pr_number: Mapped[int | None] = mapped_column(nullable=True)
+    # If imported from a GitHub issue: the original issue URL. Surfaced in
+    # the UI as a "from GitHub #N" chip linking back to the source.
+    github_issue_url: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     # Hierarchy. `kind` defaults to "task" so existing rows are unaffected by
     # the migration. `parent_id` is nullable: epics never have one, features
@@ -204,6 +207,70 @@ class Clarification(Base, TimestampMixin):
         # "Latest clarification for ticket" query — descending id is server's
         # tiebreaker since `created_at` resolution is sub-second.
         Index("ix_clarifications_ticket_id_id", "ticket_id", "id"),
+    )
+
+
+class AgentDraftKind(StrEnum):
+    """Which agent kickoff this draft represents. Used as a discriminator so
+    one table can persist every long-running architect call (decompose,
+    plan-draft, …) — keeps the persistence + streaming + UI-polling pattern
+    uniform across modes."""
+
+    decompose = "decompose"
+    plan = "plan"
+
+
+class AgentDraftStatus(StrEnum):
+    pending = "pending"
+    running = "running"
+    done = "done"
+    failed = "failed"
+
+
+class AgentDraft(Base, TimestampMixin):
+    """Persistent record of one architect 'draft' call (decompose or plan).
+
+    Same lifecycle contract as Clarification — the row is created
+    immediately, a background task writes `raw_md` progressively while the
+    architect streams, then finalizes with parsed `payload` (e.g. the
+    feature/task tree for decompose) on completion. Survives tab close.
+
+    The latest row per (ticket_id, kind) is what the UI displays. A
+    re-draft inserts a new row; old ones stay for audit.
+    """
+
+    __tablename__ = "agent_drafts"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    ticket_id: Mapped[int] = mapped_column(
+        ForeignKey("tickets.id", ondelete="CASCADE"), nullable=False
+    )
+    kind: Mapped[AgentDraftKind] = mapped_column(String(16), nullable=False)
+    status: Mapped[AgentDraftStatus] = mapped_column(
+        String(16), default=AgentDraftStatus.pending, nullable=False
+    )
+    # Streamed architect output (markdown + tool-use comment markers).
+    raw_md: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    # Parsed result shape — varies by kind:
+    #   decompose: {"features": [{title, description, domain, depends_on,
+    #                              tasks: [{title, description}]}, ...]}
+    #   plan:      {"plan_md": "...", "domain_name": "..."}
+    payload: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
+    prompt_version: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    num_turns: Mapped[int | None] = mapped_column(nullable=True)
+    duration_ms: Mapped[int | None] = mapped_column(nullable=True)
+    total_cost_usd: Mapped[float | None] = mapped_column(Float, nullable=True)
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    started_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    completed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
+    __table_args__ = (
+        # "Latest draft for ticket+kind" — covers the polling query.
+        Index("ix_agent_drafts_ticket_kind_id", "ticket_id", "kind", "id"),
     )
 
 

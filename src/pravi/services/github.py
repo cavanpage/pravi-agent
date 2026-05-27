@@ -321,6 +321,119 @@ async def ensure_repo_cloned(
     return target
 
 
+async def list_repo_issues(
+    access_token: str,
+    *,
+    owner: str,
+    name: str,
+    state: str = "open",
+    labels: str = "",
+    per_page: int = 50,
+) -> list[dict[str, Any]]:
+    """List issues on a repo. Filters out PRs (GitHub returns them in the
+    same payload but they're not actually issues for our purposes).
+
+    `state` is "open" | "closed" | "all"; `labels` is a comma-separated
+    list. Output is normalized to the fields the UI / convert flow needs.
+    """
+    headers = {
+        "Authorization": f"Bearer {access_token}",
+        "Accept": "application/vnd.github+json",
+        "X-GitHub-Api-Version": "2022-11-28",
+    }
+    params: dict[str, str | int] = {
+        "state": state,
+        "per_page": per_page,
+        "sort": "updated",
+        "direction": "desc",
+    }
+    if labels.strip():
+        params["labels"] = labels.strip()
+    async with httpx.AsyncClient(timeout=15.0) as client:
+        r = await client.get(
+            f"https://api.github.com/repos/{owner}/{name}/issues",
+            headers=headers,
+            params=params,
+        )
+        r.raise_for_status()
+        items = r.json()
+    return [_normalize_issue(it) for it in items if "pull_request" not in it]
+
+
+def _normalize_issue(item: dict[str, Any]) -> dict[str, Any]:
+    user = item.get("user") or {}
+    labels = item.get("labels") or []
+    return {
+        "number": item.get("number"),
+        "title": item.get("title") or "",
+        "body": item.get("body") or "",
+        "state": item.get("state") or "open",
+        "html_url": item.get("html_url"),
+        "user_login": user.get("login"),
+        "user_avatar_url": user.get("avatar_url"),
+        "labels": [
+            {"name": lbl.get("name"), "color": lbl.get("color")}
+            for lbl in labels
+            if isinstance(lbl, dict) and lbl.get("name")
+        ],
+        "comments": item.get("comments") or 0,
+        "updated_at": item.get("updated_at"),
+        "created_at": item.get("created_at"),
+    }
+
+
+async def comment_on_issue(
+    access_token: str, *, owner: str, name: str, number: int, body: str
+) -> dict[str, Any]:
+    """Post a single comment on a GitHub issue. Used to leave a 'tracked as
+    pravi ticket X' trail when converting an issue."""
+    headers = {
+        "Authorization": f"Bearer {access_token}",
+        "Accept": "application/vnd.github+json",
+        "X-GitHub-Api-Version": "2022-11-28",
+    }
+    async with httpx.AsyncClient(timeout=15.0) as client:
+        r = await client.post(
+            f"https://api.github.com/repos/{owner}/{name}/issues/{number}/comments",
+            headers=headers,
+            json={"body": body},
+        )
+    if r.status_code >= 400:
+        raise RuntimeError(
+            f"github comment {r.status_code}: {r.text[:300]}"
+        )
+    return r.json()
+
+
+async def add_labels_to_issue(
+    access_token: str,
+    *,
+    owner: str,
+    name: str,
+    number: int,
+    labels: list[str],
+) -> None:
+    """Add labels to an issue. GitHub creates any missing labels with a
+    default color. Idempotent — re-adding an existing label is a no-op."""
+    if not labels:
+        return
+    headers = {
+        "Authorization": f"Bearer {access_token}",
+        "Accept": "application/vnd.github+json",
+        "X-GitHub-Api-Version": "2022-11-28",
+    }
+    async with httpx.AsyncClient(timeout=15.0) as client:
+        r = await client.post(
+            f"https://api.github.com/repos/{owner}/{name}/issues/{number}/labels",
+            headers=headers,
+            json={"labels": labels},
+        )
+    if r.status_code >= 400:
+        raise RuntimeError(
+            f"github label {r.status_code}: {r.text[:300]}"
+        )
+
+
 async def create_pull_request(
     access_token: str,
     *,

@@ -38,6 +38,7 @@ export interface Ticket {
   updated_at: string;
   pr_number: number | null;
   pr_url: string | null;
+  github_issue_url: string | null;
 }
 
 export interface BudgetBreakdown {
@@ -145,6 +146,8 @@ async function jsonReq<T>(input: string, init?: RequestInit): Promise<T> {
 export interface ClarificationQuestion {
   text: string;
   why: string;
+  /** If present, render as multi-choice radios in addition to free-text. */
+  options?: string[];
 }
 
 export interface ClarifyDraft {
@@ -232,11 +235,61 @@ export interface DecomposeApproveResult {
   task_external_ids: string[];
 }
 
+/** Persisted architect-draft row (decompose or plan). The kickoff endpoints
+ * return this immediately, and the GET endpoints are the UI's poll target.
+ * `payload` shape varies by kind:
+ *   - decompose: { features: DecomposedFeature[] }
+ *   - plan:      { plan_md: string, domain_name: string } */
+export type AgentDraftStatus = "pending" | "running" | "done" | "failed";
+
+export interface AgentDraft {
+  id: number;
+  ticket_id: number;
+  kind: "decompose" | "plan";
+  status: AgentDraftStatus;
+  raw_md: string;
+  payload: Record<string, unknown>;
+  prompt_version: string | null;
+  num_turns: number | null;
+  duration_ms: number | null;
+  total_cost_usd: number | null;
+  error: string | null;
+  started_at: string | null;
+  completed_at: string | null;
+  updated_at: string;
+}
+
 export interface GitHubRepoRef {
   owner: string;
   name: string;
   clone_url: string;
   default_branch?: string;
+}
+
+export interface GitHubIssueLabel {
+  name: string;
+  color: string | null;
+}
+
+export interface GitHubIssue {
+  number: number;
+  title: string;
+  body: string;
+  state: "open" | "closed";
+  html_url: string | null;
+  user_login: string | null;
+  user_avatar_url: string | null;
+  labels: GitHubIssueLabel[];
+  comments: number;
+  updated_at: string | null;
+  created_at: string | null;
+}
+
+export interface GitHubIssueRef {
+  owner: string;
+  name: string;
+  number: number;
+  html_url?: string;
 }
 
 export interface GitHubRepoResult {
@@ -259,6 +312,10 @@ export interface CreateTicketInput {
   // Optional when `github_repo` is set — server lazily clones + registers.
   repo_path?: string;
   github_repo?: GitHubRepoRef;
+  /** Source GitHub issue when imported via the /issues page. Server stamps
+   * `github_issue_url` on the row and best-effort comments + labels the
+   * issue ("pravi-imported"). */
+  github_issue?: GitHubIssueRef;
   domain_name?: string;
   base_ref?: string;
   cleanup_worktree?: boolean;
@@ -345,10 +402,17 @@ export const api = {
   clarifyStreamUrl: (externalId: string) =>
     `/api/tickets/${encodeURIComponent(externalId)}/clarify/stream`,
 
+  /** Kick off a backgrounded decompose draft. Returns the persisted row
+   * immediately; poll `getDecomposeDraft` for updates. Survives tab close. */
   decomposeDraft: (externalId: string, clarifications: ClarificationQA[] = []) =>
-    jsonReq<DecomposeDraft>(
+    jsonReq<AgentDraft>(
       `/api/tickets/${encodeURIComponent(externalId)}/decompose/draft`,
       { method: "POST", body: JSON.stringify({ clarifications }) },
+    ),
+
+  getDecomposeDraft: (externalId: string) =>
+    jsonReq<AgentDraft | null>(
+      `/api/tickets/${encodeURIComponent(externalId)}/decompose-draft`,
     ),
 
   decomposeApprove: (externalId: string, body: { raw_md: string; approver?: string }) =>
@@ -380,6 +444,21 @@ export const api = {
   searchGithubRepos: (q: string) => {
     const qs = q ? `?q=${encodeURIComponent(q)}` : "";
     return jsonReq<GitHubRepoResult[]>(`/api/auth/github/repos/search${qs}`);
+  },
+
+  /** List issues on a connected GitHub repo (PRs filtered out server-side). */
+  listGithubIssues: (
+    owner: string,
+    name: string,
+    opts: { state?: "open" | "closed" | "all"; labels?: string } = {},
+  ) => {
+    const params = new URLSearchParams();
+    if (opts.state) params.set("state", opts.state);
+    if (opts.labels) params.set("labels", opts.labels);
+    const qs = params.toString() ? `?${params}` : "";
+    return jsonReq<GitHubIssue[]>(
+      `/api/auth/github/repos/${encodeURIComponent(owner)}/${encodeURIComponent(name)}/issues${qs}`,
+    );
   },
 
   bulkDeleteTickets: (externalIds: string[]) =>
@@ -421,11 +500,18 @@ export const api = {
     return jsonReq<Domain[]>(`/api/tickets/${encodeURIComponent(externalId)}/domains${qs}`);
   },
 
+  /** Kick off a backgrounded plan draft for a task. Returns persisted row
+   * immediately; poll `getPlanDraft` for progress + streamed `raw_md`. */
   draftPlan: (externalId: string, body: { domain_name?: string; domains_file?: string }) =>
-    jsonReq<PlanDraft>(`/api/tickets/${encodeURIComponent(externalId)}/plan/draft`, {
+    jsonReq<AgentDraft>(`/api/tickets/${encodeURIComponent(externalId)}/plan/draft`, {
       method: "POST",
       body: JSON.stringify(body),
     }),
+
+  getPlanDraft: (externalId: string) =>
+    jsonReq<AgentDraft | null>(
+      `/api/tickets/${encodeURIComponent(externalId)}/plan-draft`,
+    ),
 
   approvePlan: (
     externalId: string,

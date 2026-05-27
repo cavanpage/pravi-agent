@@ -4,12 +4,27 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 
 import {
+  AgentDraft,
   api,
   ClarificationQA,
   ClarificationQuestion,
-  DecomposeDraft,
+  DecomposedFeature,
   PersistedClarification,
 } from "../lib/api";
+import {
+  ProgressEvent,
+  TOOL_LABEL,
+  extractProgress,
+  stripProgressMarkers,
+} from "../lib/progressMarkers";
+
+/** Pull the parsed feature list out of an AgentDraft(payload). Returns []
+ * if the draft isn't done yet or didn't parse. */
+function draftFeatures(d: AgentDraft | null | undefined): DecomposedFeature[] {
+  if (!d) return [];
+  const f = (d.payload as { features?: unknown } | undefined)?.features;
+  return Array.isArray(f) ? (f as DecomposedFeature[]) : [];
+}
 
 /**
  * Extract whatever questions are recognizable in a possibly-incomplete YAML
@@ -31,10 +46,23 @@ function partialParseQuestions(rawMd: string): ClarificationQuestion[] {
     if (!text) continue;
     const whyMatch = entry.match(/why:\s*["']([^"'\n]*?)["']/);
     const why = whyMatch ? whyMatch[1].trim() : "";
-    out.push({ text, why });
+    // Inline options block (multi-choice). YAML form:
+    //     options:
+    //       - "Option A"
+    //       - "Option B"
+    const opts: string[] = [];
+    const optMatch = entry.match(/options:\s*\n((?:\s{2,}-\s*.*\n?)+)/);
+    if (optMatch) {
+      for (const line of optMatch[1].split("\n")) {
+        const m = line.match(/^\s*-\s*["']?(.*?)["']?\s*$/);
+        if (m && m[1].trim()) opts.push(m[1].trim());
+      }
+    }
+    out.push({ text, why, options: opts.length > 0 ? opts : undefined });
   }
   return out;
 }
+
 
 function statusElapsedSeconds(startedAt: string | null | undefined): number {
   if (!startedAt) return 0;
@@ -102,9 +130,32 @@ export function DecomposePanel({
     });
   }, [liveQuestions.length]);
 
-  // ---- Phase 2: decompose ----
-  const [draft, setDraft] = useState<DecomposeDraft | null>(null);
+  // ---- Phase 2: decompose (backgrounded — survives tab close) ----
+  // Polled persistent draft. While status=running, raw_md streams + tool-use
+  // progress markers update the UI. When status=done, we seed the editor.
+  const draftQ = useQuery({
+    queryKey: ["decompose-draft", externalId],
+    queryFn: () => api.getDecomposeDraft(externalId),
+    refetchInterval: (q) => {
+      const d = q.state.data;
+      return d && (d.status === "running" || d.status === "pending") ? 1500 : false;
+    },
+  });
+  const draft = draftQ.data ?? null;
+  const draftDone = draft?.status === "done";
+  const draftRunning =
+    draft?.status === "running" || draft?.status === "pending";
+
+  // Editor state — only seeded once when the draft transitions to done so
+  // subsequent polls don't clobber user edits.
   const [editedMd, setEditedMd] = useState<string>("");
+  const [seededDraftId, setSeededDraftId] = useState<number | null>(null);
+  useEffect(() => {
+    if (draftDone && draft && draft.id !== seededDraftId) {
+      setEditedMd(draft.raw_md || "");
+      setSeededDraftId(draft.id);
+    }
+  }, [draftDone, draft, seededDraftId]);
 
   const [error, setError] = useState<string | null>(null);
 
@@ -131,9 +182,12 @@ export function DecomposePanel({
           : [];
       return api.decomposeDraft(externalId, qa);
     },
-    onSuccess: (d) => {
-      setDraft(d);
-      setEditedMd(d.raw_md);
+    onSuccess: (row) => {
+      // Server returned the fresh draft row (status=pending/running). Seed
+      // the cache so polling picks up where it left off without a refetch.
+      qc.setQueryData(["decompose-draft", externalId], row);
+      setSeededDraftId(null); // editor will re-seed when this draft completes
+      setEditedMd("");
       setError(null);
     },
     onError: (e: Error) => setError(e.message),
@@ -148,8 +202,8 @@ export function DecomposePanel({
       qc.invalidateQueries({ queryKey: ["tickets"] });
       qc.invalidateQueries({ queryKey: ["roadmap", externalId] });
       onApproved();
-      setDraft(null);
       setEditedMd("");
+      setSeededDraftId(null);
       setAnswers([]);
       setClarifySkipped(false);
       console.info(
@@ -287,16 +341,19 @@ export function DecomposePanel({
         </div>
       ) : null}
 
-      {/* Phase 2: decompose draft */}
+      {/* Phase 2: decompose draft — backgrounded, polled, tab-resilient */}
       {draft ? (
         <DecomposeDraftView
           draft={draft}
+          isRunning={draftRunning}
           editedMd={editedMd}
           onEditedMdChange={setEditedMd}
           onApprove={() => approveMut.mutate()}
           onDiscard={() => {
-            setDraft(null);
+            // Clear local editor state but leave the persisted draft so the
+            // user can re-open the same tab and pick up where they left off.
             setEditedMd("");
+            setSeededDraftId(null);
             setError(null);
           }}
           isApproving={approveMut.isPending}
@@ -387,9 +444,10 @@ function ClarifyView({
       </div>
 
       {totalSoFar === 0 && isRunning ? (
-        <div className="rounded-xl border border-white/10 bg-white/[0.02] px-4 py-3 text-sm text-neutral-400 italic">
-          waiting for the first question…
-        </div>
+        <ProgressFeed
+          events={extractProgress(clarification.raw_md || "")}
+          emptyHint="waiting for the first question…"
+        />
       ) : null}
 
       <ol className="flex flex-col gap-3">
@@ -404,12 +462,10 @@ function ClarifyView({
             {q.why ? (
               <div className="text-xs text-neutral-500 mt-1 italic">{q.why}</div>
             ) : null}
-            <textarea
+            <QuestionAnswer
+              question={q}
               value={answers[i] ?? ""}
-              onChange={(e) => onAnswerChange(i, e.target.value)}
-              placeholder="your answer (or leave blank to let the architect assume)"
-              rows={2}
-              className="mt-2 w-full px-3 py-2 rounded-lg bg-white/[0.03] border border-white/10 text-sm text-neutral-100 placeholder-neutral-600 focus:outline-none focus:border-purple-400/40 transition resize-none"
+              onChange={(v) => onAnswerChange(i, v)}
             />
           </li>
         ))}
@@ -444,29 +500,69 @@ function ClarifyView({
 
 function DecomposeDraftView({
   draft,
+  isRunning,
   editedMd,
   onEditedMdChange,
   onApprove,
   onDiscard,
   isApproving,
 }: {
-  draft: DecomposeDraft;
+  draft: AgentDraft;
+  isRunning: boolean;
   editedMd: string;
   onEditedMdChange: (v: string) => void;
   onApprove: () => void;
   onDiscard: () => void;
   isApproving: boolean;
 }) {
+  const features = draftFeatures(draft);
+  const events = extractProgress(draft.raw_md || "");
+
+  // Tick once a second so the elapsed timer increments between polls.
+  const [tick, setTick] = useState(0);
+  useEffect(() => {
+    if (!isRunning) return;
+    const id = setInterval(() => setTick((n) => n + 1), 1000);
+    return () => clearInterval(id);
+  }, [isRunning]);
+  void tick;
+  const elapsed = statusElapsedSeconds(draft.started_at);
+
+  // While running we hide the editor (the user can't edit a still-streaming
+  // draft) and show the live raw text + activity feed. When done, switch to
+  // the side-by-side editor + preview.
+  if (isRunning) {
+    return (
+      <>
+        <div className="text-xs font-mono text-purple-200 flex items-center gap-2">
+          <span className="size-1.5 rounded-full bg-purple-300 animate-pulse" />
+          architect drafting… {elapsed}s
+          <span className="text-neutral-500">
+            (tab-safe — closing this page won't cancel the run)
+          </span>
+        </div>
+        <ProgressFeed events={events} emptyHint="warming up…" />
+        {draft.raw_md ? (
+          <div className="rounded-xl border border-white/10 bg-white/[0.02] p-3 max-h-72 overflow-auto markdown-body text-sm">
+            <ReactMarkdown remarkPlugins={[remarkGfm]}>
+              {stripProgressMarkers(draft.raw_md)}
+            </ReactMarkdown>
+          </div>
+        ) : null}
+      </>
+    );
+  }
+
   return (
     <>
       <div className="text-xs text-neutral-500 font-mono">
-        architect · {draft.num_turns} turns · {(draft.duration_ms / 1000).toFixed(1)}s ·
-        ${(draft.total_cost_usd || 0).toFixed(4)}
-        {draft.errors.length ? (
-          <span className="text-amber-400 ml-2">
-            {" "}
-            · YAML parse issues: {draft.errors.length}
-          </span>
+        architect · {draft.num_turns ?? "?"} turns ·{" "}
+        {draft.duration_ms != null
+          ? `${(draft.duration_ms / 1000).toFixed(1)}s`
+          : "?"}{" "}
+        · ${(draft.total_cost_usd ?? 0).toFixed(4)}
+        {draft.status === "failed" ? (
+          <span className="text-rose-400 ml-2"> · failed: {draft.error}</span>
         ) : null}
       </div>
 
@@ -492,15 +588,15 @@ function DecomposeDraftView({
         </div>
       </div>
 
-      {draft.features.length > 0 ? (
+      {features.length > 0 ? (
         <details className="rounded-xl border border-white/10 bg-white/[0.02] px-3 py-2 text-sm">
           <summary className="cursor-pointer text-neutral-300">
-            parsed: {draft.features.length} feature
-            {draft.features.length === 1 ? "" : "s"},{" "}
-            {draft.features.reduce((n, f) => n + f.tasks.length, 0)} tasks
+            parsed: {features.length} feature
+            {features.length === 1 ? "" : "s"},{" "}
+            {features.reduce((n, f) => n + f.tasks.length, 0)} tasks
           </summary>
           <ul className="mt-2 ml-4 list-disc space-y-1 text-neutral-300">
-            {draft.features.map((f, i) => (
+            {features.map((f, i) => (
               <li key={i}>
                 <span className="font-medium">{f.title}</span>
                 {f.domain ? (
@@ -536,5 +632,127 @@ function DecomposeDraftView({
         </button>
       </div>
     </>
+  );
+}
+
+/** Live feed of "what the architect is doing" — tool-use events the backend
+ * embeds as comment markers in raw_md while clarify is still running. */
+function ProgressFeed({
+  events,
+  emptyHint,
+}: {
+  events: ProgressEvent[];
+  emptyHint: string;
+}) {
+  if (events.length === 0) {
+    return (
+      <div className="rounded-xl border border-white/10 bg-white/[0.02] px-4 py-3 text-sm text-neutral-400 italic">
+        <span className="inline-flex items-center gap-2">
+          <span className="size-1.5 rounded-full bg-purple-300 animate-pulse" />
+          {emptyHint}
+        </span>
+      </div>
+    );
+  }
+  // Keep the feed compact — show the most recent 6 actions.
+  const recent = events.slice(-6);
+  return (
+    <div className="rounded-xl border border-white/10 bg-white/[0.02] px-4 py-3 text-sm">
+      <div className="text-[11px] uppercase tracking-[0.14em] text-purple-200/80 mb-2">
+        architect activity
+      </div>
+      <ul className="flex flex-col gap-1 font-mono text-xs text-neutral-300">
+        {recent.map((e, i) => (
+          <li key={i} className="flex items-center gap-2">
+            <span className="text-neutral-500 w-16 shrink-0">
+              {TOOL_LABEL[e.tool] ?? e.tool.toLowerCase()}
+            </span>
+            <span className="truncate">{e.summary}</span>
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
+/** Per-question answer widget — radio buttons when the architect supplied
+ * `options`, free-text fallback when it didn't. When options are present,
+ * we still expose a small "other (write in)" affordance so the user isn't
+ * forced into a preset choice. */
+function QuestionAnswer({
+  question,
+  value,
+  onChange,
+}: {
+  question: ClarificationQuestion;
+  value: string;
+  onChange: (v: string) => void;
+}) {
+  const hasOptions = !!question.options && question.options.length > 0;
+  const matchesOption = hasOptions && question.options!.includes(value);
+  const [otherOpen, setOtherOpen] = useState(false);
+
+  if (!hasOptions) {
+    return (
+      <textarea
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        placeholder="your answer (or leave blank to let the architect assume)"
+        rows={2}
+        className="mt-2 w-full px-3 py-2 rounded-lg bg-white/[0.03] border border-white/10 text-sm text-neutral-100 placeholder-neutral-600 focus:outline-none focus:border-purple-400/40 transition resize-none"
+      />
+    );
+  }
+
+  const showOther = otherOpen || (!matchesOption && value.length > 0);
+
+  return (
+    <div className="mt-2 flex flex-col gap-2">
+      {question.options!.map((opt) => {
+        const selected = value === opt;
+        return (
+          <label
+            key={opt}
+            className={`flex items-start gap-2 px-3 py-2 rounded-lg border text-sm cursor-pointer transition ${
+              selected
+                ? "border-purple-400/40 bg-purple-400/[0.08] text-neutral-100"
+                : "border-white/10 bg-white/[0.02] text-neutral-300 hover:bg-white/[0.05]"
+            }`}
+          >
+            <input
+              type="radio"
+              checked={selected}
+              onChange={() => {
+                onChange(opt);
+                setOtherOpen(false);
+              }}
+              className="mt-0.5 accent-purple-400"
+            />
+            <span>{opt}</span>
+          </label>
+        );
+      })}
+      {!showOther ? (
+        <button
+          type="button"
+          onClick={() => {
+            setOtherOpen(true);
+            onChange("");
+          }}
+          className="self-start text-xs text-purple-300 hover:text-purple-200 transition"
+        >
+          + write in another answer
+        </button>
+      ) : (
+        <textarea
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+          placeholder="other answer…"
+          rows={2}
+          autoFocus
+          className="w-full px-3 py-2 rounded-lg bg-white/[0.03] border border-white/10 text-sm text-neutral-100 placeholder-neutral-600 focus:outline-none focus:border-purple-400/40 transition resize-none"
+        />
+      )}
+    </div>
   );
 }

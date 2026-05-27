@@ -1,8 +1,10 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 
-import { api, StatusEvent, subscribeStatus, Ticket, TicketKind } from "../lib/api";
+import { AgentDraft, api, StatusEvent, subscribeStatus, Ticket, TicketKind } from "../lib/api";
 import { DecomposePanel } from "../components/DecomposePanel";
 import { DependencyEditor } from "../components/DependencyEditor";
 import { LiveRunPanel } from "../components/LiveRunPanel";
@@ -10,6 +12,11 @@ import { PlanEditor } from "../components/PlanEditor";
 import { RoadmapView } from "../components/RoadmapView";
 import { StatusBadge } from "../components/StatusBadge";
 import { TicketInfoCard } from "../components/TicketInfoCard";
+import {
+  TOOL_LABEL,
+  extractProgress,
+  stripProgressMarkers,
+} from "../lib/progressMarkers";
 
 // Statuses that mean a dev agent run is or was happening — render LiveRunPanel.
 const RUN_VISIBLE = new Set(["running_dev", "done", "in_progress", "pr_open", "failed"]);
@@ -28,7 +35,9 @@ export function TicketPlanPage() {
   const { externalId = "" } = useParams();
   const qc = useQueryClient();
   const [planContent, setPlanContent] = useState<string>("");
-  const [draftMeta, setDraftMeta] = useState<{ cost?: number; turns?: number; duration?: number } | null>(null);
+  // Track which AgentDraft.id has already seeded the editor — prevents
+  // subsequent polls from clobbering the user's edits after the draft is done.
+  const [seededDraftId, setSeededDraftId] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   // Use a query-string override for domains.yaml that may not live in the target repo yet.
@@ -58,16 +67,44 @@ export function TicketPlanPage() {
     enabled: !!ticket && isContainer,
   });
 
-  // Architect drafting — manually triggered so users don't burn tokens on page load.
+  // Architect drafting — kicked off async, persisted to DB, polled here.
+  // Closing the tab or navigating away does NOT cancel the run.
+  const planDraftQ = useQuery({
+    queryKey: ["plan-draft", externalId],
+    queryFn: () => api.getPlanDraft(externalId),
+    enabled: !!externalId && !!ticket && ticket.kind === "task",
+    refetchInterval: (q) => {
+      const d = q.state.data;
+      return d && (d.status === "running" || d.status === "pending") ? 1500 : false;
+    },
+  });
+  const planDraft = planDraftQ.data ?? null;
+  const planDraftRunning =
+    planDraft?.status === "running" || planDraft?.status === "pending";
+  const planDraftDone = planDraft?.status === "done";
+
+  // Seed the editor once when a fresh draft completes; subsequent polls of
+  // the same draft must not stomp the user's edits.
+  useEffect(() => {
+    if (planDraftDone && planDraft && planDraft.id !== seededDraftId) {
+      const payloadMd = (planDraft.payload as { plan_md?: string } | undefined)?.plan_md;
+      setPlanContent(payloadMd || planDraft.raw_md || "");
+      setSeededDraftId(planDraft.id);
+    }
+  }, [planDraftDone, planDraft, seededDraftId]);
+
   const draftMut = useMutation({
     mutationFn: () =>
       api.draftPlan(externalId, {
         domain_name: ticket?.domain_name || undefined,
         domains_file: domainsFileOverride,
       }),
-    onSuccess: (d) => {
-      setPlanContent(d.plan_md);
-      setDraftMeta({ cost: d.total_cost_usd ?? undefined, turns: d.num_turns, duration: d.duration_ms });
+    onSuccess: (row) => {
+      // Seed the cache with the freshly-created row (status=pending/running)
+      // so the polling query picks it up without an extra refetch.
+      qc.setQueryData(["plan-draft", externalId], row);
+      setSeededDraftId(null); // editor re-seeds when this draft completes
+      setPlanContent("");
       setError(null);
     },
     onError: (e: Error) => setError(e.message),
@@ -177,17 +214,30 @@ export function TicketPlanPage() {
             <ParentBreadcrumb externalId={ticket.parent_external_id} />
           ) : null}
           <h1 className="text-3xl font-semibold tracking-tight mt-2">{ticket.title}</h1>
-          {ticket.pr_url ? (
-            <a
-              href={ticket.pr_url}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="inline-flex items-center gap-1.5 mt-2 px-2.5 py-1 rounded-full bg-emerald-400/10 border border-emerald-400/30 text-xs text-emerald-200 hover:bg-emerald-400/15 transition"
-              title={ticket.pr_url}
-            >
-              ⤴ PR #{ticket.pr_number} opened on GitHub
-            </a>
-          ) : null}
+          <div className="flex items-center gap-2 mt-2 flex-wrap">
+            {ticket.github_issue_url ? (
+              <a
+                href={ticket.github_issue_url}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-blue-400/10 border border-blue-400/30 text-xs text-blue-200 hover:bg-blue-400/15 transition"
+                title={ticket.github_issue_url}
+              >
+                ⎘ imported from GitHub issue
+              </a>
+            ) : null}
+            {ticket.pr_url ? (
+              <a
+                href={ticket.pr_url}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-emerald-400/10 border border-emerald-400/30 text-xs text-emerald-200 hover:bg-emerald-400/15 transition"
+                title={ticket.pr_url}
+              >
+                ⤴ PR #{ticket.pr_number} opened on GitHub
+              </a>
+            ) : null}
+          </div>
         </div>
         <div className="flex flex-col items-end gap-1.5">
           {ticket.kind === "task" ? (
@@ -289,29 +339,48 @@ export function TicketPlanPage() {
             <div className="flex items-center gap-3 flex-wrap">
               <button
                 onClick={() => draftMut.mutate()}
-                disabled={draftMut.isPending || workflowDone || !waitingForPlan}
+                disabled={
+                  draftMut.isPending ||
+                  planDraftRunning ||
+                  workflowDone ||
+                  !waitingForPlan
+                }
                 className="px-3.5 py-1.5 rounded-full bg-blue-500 hover:bg-blue-400 text-white text-sm font-medium shadow-lg shadow-blue-500/20 disabled:opacity-40 disabled:shadow-none transition"
                 title={
                   workflowDone
                     ? "workflow already finished"
                     : !waitingForPlan
                       ? `workflow status: ${statusEvt?.status || ticket.status}`
-                      : ""
+                      : planDraftRunning
+                        ? "architect is already drafting — closing the tab won't cancel it"
+                        : ""
                 }
               >
-                {draftMut.isPending ? "drafting…" : planContent ? "re-draft" : "draft plan with architect"}
+                {draftMut.isPending || planDraftRunning
+                  ? "drafting…"
+                  : planContent
+                    ? "re-draft"
+                    : "draft plan with architect"}
               </button>
-              {draftMeta ? (
+              {planDraftDone && planDraft ? (
                 <span className="text-xs text-neutral-500 font-mono">
-                  architect · {draftMeta.turns} turns · {(draftMeta.duration! / 1000).toFixed(1)}s · ${(draftMeta.cost || 0).toFixed(4)}
+                  architect · {planDraft.num_turns ?? "?"} turns ·{" "}
+                  {planDraft.duration_ms != null
+                    ? `${(planDraft.duration_ms / 1000).toFixed(1)}s`
+                    : "?"}{" "}
+                  · ${(planDraft.total_cost_usd ?? 0).toFixed(4)}
                 </span>
               ) : null}
             </div>
 
+            {planDraftRunning && planDraft ? (
+              <PlanDraftActivity draft={planDraft} />
+            ) : null}
+
             <PlanEditor
               value={planContent}
               onChange={setPlanContent}
-              disabled={draftMut.isPending || approveMut.isPending}
+              disabled={draftMut.isPending || planDraftRunning || approveMut.isPending}
             />
 
             <div className="flex items-center gap-3 mt-2 flex-wrap">
@@ -439,4 +508,56 @@ function ContainerView({
 
 function Center({ children }: { children: React.ReactNode }) {
   return <div className="min-h-screen flex flex-col items-center justify-center gap-2">{children}</div>;
+}
+
+/** Live "what the architect is doing" view, shown while a plan draft is
+ * still streaming. Tab-resilient: the background task keeps writing even
+ * if this view is closed; reopening picks up where it left off. */
+function PlanDraftActivity({ draft }: { draft: AgentDraft }) {
+  const events = extractProgress(draft.raw_md);
+  const recent = events.slice(-6);
+
+  // Tick once a second so the elapsed counter increments between polls.
+  const [tick, setTick] = useState(0);
+  useEffect(() => {
+    const id = setInterval(() => setTick((n) => n + 1), 1000);
+    return () => clearInterval(id);
+  }, []);
+  void tick;
+  const elapsed = draft.started_at
+    ? Math.max(0, Math.floor((Date.now() - new Date(draft.started_at).getTime()) / 1000))
+    : 0;
+
+  return (
+    <div className="rounded-2xl border border-blue-400/20 bg-blue-400/[0.04] p-4 flex flex-col gap-3">
+      <div className="text-xs font-mono text-blue-200 flex items-center gap-2 flex-wrap">
+        <span className="size-1.5 rounded-full bg-blue-300 animate-pulse" />
+        architect drafting plan… {elapsed}s
+        <span className="text-neutral-500">
+          (tab-safe — closing this page won't cancel the run)
+        </span>
+      </div>
+      {recent.length > 0 ? (
+        <ul className="flex flex-col gap-1 font-mono text-xs text-neutral-300">
+          {recent.map((e, i) => (
+            <li key={i} className="flex items-center gap-2">
+              <span className="text-neutral-500 w-16 shrink-0">
+                {TOOL_LABEL[e.tool] ?? e.tool.toLowerCase()}
+              </span>
+              <span className="truncate">{e.summary}</span>
+            </li>
+          ))}
+        </ul>
+      ) : (
+        <div className="text-xs text-neutral-500 italic">warming up…</div>
+      )}
+      {draft.raw_md ? (
+        <div className="rounded-xl border border-white/10 bg-white/[0.02] p-3 max-h-60 overflow-auto markdown-body text-sm">
+          <ReactMarkdown remarkPlugins={[remarkGfm]}>
+            {stripProgressMarkers(draft.raw_md)}
+          </ReactMarkdown>
+        </div>
+      ) : null}
+    </div>
+  );
 }

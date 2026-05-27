@@ -191,7 +191,10 @@ async def _run(clar_id: int) -> None:
             clar_id,
             status=ClarifyStatus.done if result.success else ClarifyStatus.failed,
             raw_md=result.raw_md or raw_buf,
-            questions=[{"text": q.text, "why": q.why} for q in questions],
+            questions=[
+                {"text": q.text, "why": q.why, "options": list(q.options or [])}
+                for q in questions
+            ],
             prompt_version=result.prompt_version,
             num_turns=result.num_turns,
             duration_ms=result.duration_ms,

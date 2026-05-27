@@ -50,5 +50,18 @@ def parse_clarifications(raw_md: str) -> tuple[list[ClarificationQuestion], list
             errors.append(f"questions[{i}].text is required")
             continue
         why = str(q.get("why") or "").strip()
-        questions.append(ClarificationQuestion(text=text, why=why))
+        # Optional preset answer list. Stringify each entry so non-string
+        # YAML values (yes/no, numbers) become safe labels.
+        opts_raw = q.get("options") or []
+        options: list[str] = []
+        if isinstance(opts_raw, list):
+            for o in opts_raw:
+                s = str(o).strip()
+                if s:
+                    options.append(s)
+        else:
+            errors.append(f"questions[{i}].options must be a list when present")
+        questions.append(
+            ClarificationQuestion(text=text, why=why, options=options)
+        )
     return questions, errors

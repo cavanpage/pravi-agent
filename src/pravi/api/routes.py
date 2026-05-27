@@ -22,14 +22,13 @@ from temporalio.service import RPCError
 from pravi.agents.architects.decompose_parser import parse_decomposition
 from pravi.agents.factory import get_architect
 from pravi.agents.protocols import (
-    ArchitectRequest,
     ClarificationQA,
     ClarifyRequest,
-    DecomposeRequest,
     DomainBrief,
 )
 from pravi.api.schemas import (
     AddDependencyRequest,
+    AgentDraftOut,
     BudgetBreakdownOut,
     BulkDeleteRequest,
     BulkDeleteResult,
@@ -40,15 +39,11 @@ from pravi.api.schemas import (
     CreateTicketResult,
     DecomposeApproveOut,
     DecomposeApproveRequest,
-    DecomposedFeatureOut,
-    DecomposeDraftOut,
     DecomposeDraftRequest,
-    DecomposedTaskOut,
     DomainOut,
     PersistedClarificationOut,
     PlanApproveOut,
     PlanApproveRequest,
-    PlanDraftOut,
     PlanDraftRequest,
     RepoOut,
     RoadmapFeatureOut,
@@ -64,6 +59,8 @@ from pravi.api.temporal_client import get_temporal_client
 from pravi.budget import cost_rollup
 from pravi.config import get_settings
 from pravi.db.models import (
+    AgentDraft,
+    AgentDraftKind,
     Clarification,
     Event,
     FeatureDependency,
@@ -77,6 +74,7 @@ from pravi.db.models import (
 from pravi.db.session import session_scope
 from pravi.domains.registry import DomainRegistry
 from pravi.events import KIND_RUN_FINISHED, listen_events
+from pravi.services import agent_draft as draft_service
 from pravi.services import clarification as clarification_service
 from pravi.services import github as gh
 from pravi.temporal_utils import (
@@ -162,6 +160,7 @@ def _ticket_to_out(
         updated_at=ticket.updated_at,
         pr_number=ticket.pr_number,
         pr_url=pr_url,
+        github_issue_url=ticket.github_issue_url,
     )
 
 
@@ -267,6 +266,33 @@ async def get_cost_rollup(external_id: str) -> CostRollupOut:
     )
 
 
+async def _reject_if_ceiling_exceeds_parent(
+    session,
+    parent_id: int | None,
+    proposed: float | None,
+) -> None:
+    """Refuse to set a child ceiling that overshoots the parent's effective
+    remaining. Cheap server-side defense — the form also validates, and the
+    dev-run pre-flight already enforces it at runtime, but landing a phantom
+    budget in the DB confuses every downstream display."""
+    if parent_id is None or proposed is None:
+        return
+    parent = await session.get(Ticket, parent_id)
+    if parent is None:
+        return
+    rollup = await cost_rollup(session, parent)
+    remaining = rollup.effective_remaining_usd
+    if remaining is not None and proposed > remaining:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"cost_ceiling_usd ${proposed:.2f} exceeds parent's effective "
+                f"remaining ${remaining:.2f} (constrained by "
+                f"{rollup.constraint_source})"
+            ),
+        )
+
+
 @router.patch("/tickets/{external_id}/budget", response_model=TicketOut)
 async def update_ticket_budget(
     external_id: str, body: TicketBudgetUpdate
@@ -279,6 +305,9 @@ async def update_ticket_budget(
         fresh = await session.get(Ticket, ticket.id)
         if fresh is None:
             raise HTTPException(status_code=404, detail=f"ticket {external_id!r} not found")
+        await _reject_if_ceiling_exceeds_parent(
+            session, fresh.parent_id, body.cost_ceiling_usd
+        )
         fresh.cost_ceiling_usd = body.cost_ceiling_usd
         await session.flush()
         pext = await _parent_external_id(session, fresh.parent_id)
@@ -447,6 +476,32 @@ async def create_ticket(req: CreateTicketRequest) -> CreateTicketResult:
             ) from e
         repo_path = str(cloned)
         github_meta = (req.github_repo.owner, req.github_repo.name)
+
+    # If we're importing from a GitHub issue and the user didn't supply a
+    # path or a cloneable repo, look up the existing local Repo by
+    # owner/name. This is the /issues page's path — it already knows which
+    # repo the issue lives in.
+    if repo_path is None and req.github_issue is not None:
+        async with session_scope() as session:
+            existing = (
+                await session.execute(
+                    select(Repo).where(
+                        Repo.github_owner == req.github_issue.owner,
+                        Repo.github_name == req.github_issue.name,
+                    )
+                )
+            ).scalar_one_or_none()
+        if existing is None:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"no local checkout of {req.github_issue.owner}/"
+                    f"{req.github_issue.name} yet — create any ticket against "
+                    "that repo from /new first to clone it"
+                ),
+            )
+        repo_path = existing.local_path
+
     if not repo_path:
         raise HTTPException(
             status_code=400,
@@ -485,6 +540,15 @@ async def create_ticket(req: CreateTicketRequest) -> CreateTicketResult:
         external_id = f"{prefix}{uuid.uuid4().hex[:8]}"
 
     async with session_scope() as session:
+        # Reject child ceilings that overshoot the parent's effective
+        # remaining — same check the PATCH endpoint runs. Done inside the
+        # session so cost_rollup can read fresh DB state.
+        await _reject_if_ceiling_exceeds_parent(
+            session,
+            parent_row.id if parent_row is not None else None,
+            req.cost_ceiling_usd,
+        )
+
         existing_repo = (
             await session.execute(select(Repo).where(Repo.local_path == str(repo_root)))
         ).scalar_one_or_none()
@@ -509,6 +573,16 @@ async def create_ticket(req: CreateTicketRequest) -> CreateTicketResult:
             )
         ).scalar_one_or_none()
 
+        # When importing from a GitHub issue, build the URL once so we can
+        # both stamp it on the ticket row and use it for the comment-back.
+        github_issue_url: str | None = None
+        if req.github_issue is not None:
+            gi = req.github_issue
+            github_issue_url = (
+                gi.html_url
+                or f"https://github.com/{gi.owner}/{gi.name}/issues/{gi.number}"
+            )
+
         if existing_ticket is None:
             ticket = Ticket(
                 repo_id=existing_repo.id,
@@ -520,6 +594,7 @@ async def create_ticket(req: CreateTicketRequest) -> CreateTicketResult:
                 kind=kind,
                 parent_id=parent_row.id if parent_row else None,
                 cost_ceiling_usd=req.cost_ceiling_usd,
+                github_issue_url=github_issue_url,
             )
             session.add(ticket)
             await session.flush()
@@ -532,10 +607,48 @@ async def create_ticket(req: CreateTicketRequest) -> CreateTicketResult:
                 existing_ticket.domain_name = chosen_name
             # Allow updating the ceiling on re-create; null clears it.
             existing_ticket.cost_ceiling_usd = req.cost_ceiling_usd
+            if github_issue_url and not existing_ticket.github_issue_url:
+                existing_ticket.github_issue_url = github_issue_url
             ticket_id = existing_ticket.id
 
     settings = get_settings()
     web_url = f"{settings.web_url_base.rstrip('/')}/tickets/{external_id}"
+
+    # If imported from a GitHub issue, leave a comment + label on it so the
+    # source is annotated with where the work moved to. Best-effort: any
+    # failure (lost connection, missing scope, etc.) is logged but does NOT
+    # roll back the ticket — the user can retry the back-link manually.
+    if req.github_issue is not None and existing_ticket is None:
+        gi = req.github_issue
+        try:
+            conn = await gh.get_active_connection()
+            if conn is not None:
+                comment = (
+                    f"Tracked as [pravi {kind.value} `{external_id}`]({web_url}).\n\n"
+                    f"_(Imported from this issue via pravi.)_"
+                )
+                await gh.comment_on_issue(
+                    conn.access_token,
+                    owner=gi.owner,
+                    name=gi.name,
+                    number=gi.number,
+                    body=comment,
+                )
+                await gh.add_labels_to_issue(
+                    conn.access_token,
+                    owner=gi.owner,
+                    name=gi.name,
+                    number=gi.number,
+                    labels=["pravi-imported"],
+                )
+        except Exception as e:
+            log.warning(
+                "github.backlink_failed",
+                owner=gi.owner,
+                name=gi.name,
+                number=gi.number,
+                error=str(e),
+            )
 
     # Epics + features don't run workflows in Phase 1.
     if kind != TicketKind.task:
@@ -606,70 +719,36 @@ async def create_ticket(req: CreateTicketRequest) -> CreateTicketResult:
     )
 
 
-@router.post("/tickets/{external_id}/plan/draft", response_model=PlanDraftOut)
-async def draft(external_id: str, req: PlanDraftRequest) -> PlanDraftOut:
-    """Invoke the architect agent and return a fresh draft plan.
+@router.post("/tickets/{external_id}/plan/draft", response_model=AgentDraftOut)
+async def draft(external_id: str, req: PlanDraftRequest) -> AgentDraftOut:
+    """Kick off a backgrounded plan draft for a task ticket.
 
-    Does NOT persist — the UI calls /plan/approve once the user is happy.
+    Same pattern as decompose: returns the persisted draft row immediately;
+    the UI polls GET /tickets/{id}/plan-draft. Survives tab close.
     """
-    ticket, repo = await _get_ticket_and_repo(external_id)
-
-    domain_name = req.domain_name or ticket.domain_name
-    if not domain_name:
-        raise HTTPException(status_code=400, detail="ticket has no domain and none was specified")
-
-    registry = DomainRegistry.load(
-        Path(repo.local_path),
-        override_file=_resolve_domains_file(Path(repo.local_path), req.domains_file),
-    )
+    ticket, _repo = await _get_ticket_and_repo(external_id)
     try:
-        chosen = registry.get(domain_name)
-    except KeyError as e:
+        draft_id = await draft_service.kickoff_plan_draft(
+            ticket.id, domain_name=req.domain_name
+        )
+    except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
 
-    # Pull ancestry so the architect sees epic/feature context for hierarchical tickets.
-    from pravi.activities.db_activity import _load_ancestors, build_ancestral_body
+    row = await draft_service.get_latest(ticket.id, AgentDraftKind.plan)
+    if row is None or row.id != draft_id:
+        raise HTTPException(status_code=500, detail="draft row not found after kickoff")
+    return _agent_draft_to_out(row)
 
-    async with session_scope() as session:
-        db_ticket = await session.get(Ticket, ticket.id)
-        ancestors = (
-            await _load_ancestors(session, db_ticket) if db_ticket else []
-        )
-    merged_body = build_ancestral_body(
-        ancestors,
-        str(ticket.kind),
-        ticket.title,
-        ticket.body or "",
-    )
 
-    settings = get_settings()
-    arch_req = ArchitectRequest(
-        repo_path=repo.local_path,
-        repo_name=repo.name,
-        domain_name=chosen.name,
-        domain_description=chosen.description,
-        domain_paths=list(chosen.paths),
-        ticket_title=ticket.title,
-        ticket_body=merged_body,
-        domain_context_files=list(chosen.context_files),
-        max_wall_seconds=settings.architect_max_wall_seconds,
-        max_turns=settings.architect_max_turns,
-        max_cost_usd=settings.architect_max_cost_usd,
-    )
-    arch_result = await get_architect().draft_plan(arch_req)
-    if not arch_result.success:
-        raise HTTPException(
-            status_code=500,
-            detail=f"architect failed: {'; '.join(arch_result.errors) or 'no plan produced'}",
-        )
-    return PlanDraftOut(
-        plan_md=arch_result.plan_md,
-        prompt_version=arch_result.prompt_version,
-        num_turns=arch_result.num_turns,
-        duration_ms=arch_result.duration_ms,
-        total_cost_usd=arch_result.total_cost_usd,
-        domain_name=chosen.name,
-    )
+@router.get(
+    "/tickets/{external_id}/plan-draft",
+    response_model=AgentDraftOut | None,
+)
+async def get_plan_draft(external_id: str) -> AgentDraftOut | None:
+    """Latest plan draft for this ticket (poll target). Null = never run."""
+    ticket, _repo = await _get_ticket_and_repo(external_id)
+    row = await draft_service.get_latest(ticket.id, AgentDraftKind.plan)
+    return _agent_draft_to_out(row) if row else None
 
 
 @router.post("/tickets/{external_id}/plan/approve", response_model=PlanApproveOut)
@@ -805,7 +884,10 @@ async def clarify(external_id: str) -> ClarifyDraftOut:
     return ClarifyDraftOut(
         raw_md=result.raw_md,
         questions=[
-            ClarificationQuestionOut(text=q.text, why=q.why) for q in result.questions
+            ClarificationQuestionOut(
+                text=q.text, why=q.why, options=list(q.options or [])
+            )
+            for q in result.questions
         ],
         prompt_version=result.prompt_version,
         num_turns=result.num_turns,
@@ -870,7 +952,11 @@ def _clarification_to_out(row: Clarification) -> PersistedClarificationOut:
         status=str(row.status),
         raw_md=row.raw_md or "",
         questions=[
-            ClarificationQuestionOut(text=q.get("text", ""), why=q.get("why", ""))
+            ClarificationQuestionOut(
+                text=q.get("text", ""),
+                why=q.get("why", ""),
+                options=list(q.get("options") or []),
+            )
             for q in (row.questions or [])
         ],
         prompt_version=row.prompt_version,
@@ -960,7 +1046,11 @@ async def clarify_stream(external_id: str):
                     out = ClarifyDraftOut(
                         raw_md=payload.raw_md,
                         questions=[
-                            ClarificationQuestionOut(text=q.text, why=q.why)
+                            ClarificationQuestionOut(
+                                text=q.text,
+                                why=q.why,
+                                options=list(q.options or []),
+                            )
                             for q in payload.questions
                         ],
                         prompt_version=payload.prompt_version,
@@ -981,88 +1071,70 @@ async def clarify_stream(external_id: str):
     return EventSourceResponse(event_gen())
 
 
-@router.post("/tickets/{external_id}/decompose/draft", response_model=DecomposeDraftOut)
+def _agent_draft_to_out(row: AgentDraft) -> AgentDraftOut:
+    return AgentDraftOut(
+        id=row.id,
+        ticket_id=row.ticket_id,
+        kind=str(row.kind),
+        status=str(row.status),
+        raw_md=row.raw_md or "",
+        payload=dict(row.payload or {}),
+        prompt_version=row.prompt_version,
+        num_turns=row.num_turns,
+        duration_ms=row.duration_ms,
+        total_cost_usd=row.total_cost_usd,
+        error=row.error,
+        started_at=row.started_at,
+        completed_at=row.completed_at,
+        updated_at=row.updated_at,
+    )
+
+
+@router.post(
+    "/tickets/{external_id}/decompose/draft", response_model=AgentDraftOut
+)
 async def decompose_draft(
     external_id: str, body: DecomposeDraftRequest | None = None
-) -> DecomposeDraftOut:
-    """Architect proposes a feature/task tree for an epic.
+) -> AgentDraftOut:
+    """Kick off a backgrounded decompose draft.
 
-    Does NOT persist anything; the UI shows the result, lets the user edit
-    the YAML, and posts to .../decompose/approve.
+    Returns the persisted draft row immediately (status=pending or running).
+    The UI polls GET /tickets/{id}/decompose-draft for progress; closing the
+    tab or navigating away does not interrupt the architect.
     """
-    ticket, repo = await _get_ticket_and_repo(external_id)
+    ticket, _repo = await _get_ticket_and_repo(external_id)
     if str(ticket.kind) != TicketKind.epic.value:
         raise HTTPException(
             status_code=400,
             detail=f"only epics can be decomposed (got kind={ticket.kind})",
         )
-
-    repo_root = Path(repo.local_path)
+    clarifications = [
+        ClarificationQA(question=qa.question, answer=qa.answer, why=qa.why)
+        for qa in (body.clarifications if body else [])
+    ]
     try:
-        registry = DomainRegistry.load(repo_root)
-    except FileNotFoundError as e:
+        draft_id = await draft_service.kickoff_decompose(
+            ticket.id, clarifications=clarifications
+        )
+    except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
 
-    available = [
-        DomainBrief(name=d.name, description=d.description, paths=list(d.paths))
-        for d in registry.domains
-    ]
-    # Pull union of context files across all domains so the architect sees
-    # the curated context for whichever feature it scopes to a given domain.
-    context_files: list[str] = []
-    for d in registry.domains:
-        context_files.extend(d.context_files)
+    row = await draft_service.get_latest(ticket.id, AgentDraftKind.decompose)
+    if row is None or row.id != draft_id:
+        # Defensive — kickoff just wrote a row.
+        raise HTTPException(status_code=500, detail="draft row not found after kickoff")
+    return _agent_draft_to_out(row)
 
-    clarifications = (
-        [
-            ClarificationQA(question=qa.question, answer=qa.answer, why=qa.why)
-            for qa in (body.clarifications if body else [])
-        ]
-        if body
-        else []
-    )
 
-    settings = get_settings()
-    req = DecomposeRequest(
-        repo_path=repo.local_path,
-        repo_name=repo.name,
-        epic_title=ticket.title,
-        epic_body=ticket.body or "",
-        available_domains=available,
-        default_domain=ticket.domain_name,
-        domain_context_files=context_files,
-        clarifications=clarifications,
-        max_wall_seconds=max(settings.architect_max_wall_seconds, 600),
-        max_turns=settings.architect_max_turns,
-        max_cost_usd=max(settings.architect_max_cost_usd, 2.0),
-    )
-    result = await get_architect().decompose_epic(req)
-    if not result.raw_md:
-        raise HTTPException(
-            status_code=500,
-            detail=f"architect produced no output: {'; '.join(result.errors) or 'unknown'}",
-        )
-    return DecomposeDraftOut(
-        raw_md=result.raw_md,
-        features=[
-            DecomposedFeatureOut(
-                title=f.title,
-                description=f.description,
-                domain=f.domain,
-                depends_on=list(f.depends_on),
-                tasks=[
-                    DecomposedTaskOut(title=t.title, description=t.description)
-                    for t in f.tasks
-                ],
-            )
-            for f in result.features
-        ],
-        prompt_version=result.prompt_version,
-        num_turns=result.num_turns,
-        duration_ms=result.duration_ms,
-        total_cost_usd=result.total_cost_usd,
-        errors=result.errors,
-    )
+@router.get(
+    "/tickets/{external_id}/decompose-draft",
+    response_model=AgentDraftOut | None,
+)
+async def get_decompose_draft(external_id: str) -> AgentDraftOut | None:
+    """Latest decompose draft for this epic (poll target). Null = never run."""
+    ticket, _repo = await _get_ticket_and_repo(external_id)
+    row = await draft_service.get_latest(ticket.id, AgentDraftKind.decompose)
+    return _agent_draft_to_out(row) if row else None
 
 
 @router.post("/tickets/{external_id}/decompose/approve", response_model=DecomposeApproveOut)

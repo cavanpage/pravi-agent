@@ -185,6 +185,12 @@ export function HomePage() {
           ) : null}
           <GitHubConnectButton />
           <Link
+            to="/issues"
+            className="px-3 py-1.5 rounded-full bg-white/5 hover:bg-white/10 border border-white/10 text-sm font-medium transition"
+          >
+            issues
+          </Link>
+          <Link
             to="/runs"
             className="px-3 py-1.5 rounded-full bg-white/5 hover:bg-white/10 border border-white/10 text-sm font-medium transition"
           >
@@ -379,6 +385,7 @@ function KindToggle({
         return (
           <button
             key={k}
+            type="button"
             onClick={() => onChange(k)}
             className={`px-3 py-1 text-xs rounded-full transition ${
               active

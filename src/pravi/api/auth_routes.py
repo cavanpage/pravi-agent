@@ -13,7 +13,7 @@ import structlog
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import RedirectResponse
 
-from pravi.api.schemas import GitHubConnectionOut, GitHubRepoOut
+from pravi.api.schemas import GitHubConnectionOut, GitHubIssueOut, GitHubRepoOut
 from pravi.config import get_settings
 from pravi.services import github as gh
 
@@ -94,6 +94,39 @@ async def logout() -> dict:
     """Revoke the active connection (soft-delete; row stays for audit)."""
     revoked = await gh.revoke_active_connection()
     return {"revoked": revoked}
+
+
+@router.get(
+    "/repos/{owner}/{name}/issues", response_model=list[GitHubIssueOut]
+)
+async def list_repo_issues(
+    owner: str, name: str, state: str = "open", labels: str = ""
+) -> list[GitHubIssueOut]:
+    """List issues on a connected GitHub repo. PRs are filtered out.
+
+    Used by the /issues page to scan + import as pravi tickets. `state` is
+    "open" | "closed" | "all"; `labels` is comma-separated.
+    """
+    conn = await gh.get_active_connection()
+    if conn is None:
+        raise HTTPException(
+            status_code=401,
+            detail="not connected to GitHub — click 'Connect GitHub' first",
+        )
+    try:
+        items = await gh.list_repo_issues(
+            conn.access_token,
+            owner=owner,
+            name=name,
+            state=state,
+            labels=labels,
+        )
+    except Exception as e:
+        log.exception(
+            "github.list_issues_failed", owner=owner, name=name, error=str(e)
+        )
+        raise HTTPException(status_code=502, detail=f"GitHub issues: {e}") from e
+    return [GitHubIssueOut(**it) for it in items]
 
 
 @router.get("/repos/search", response_model=list[GitHubRepoOut])

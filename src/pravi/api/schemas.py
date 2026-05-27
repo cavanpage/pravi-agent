@@ -39,6 +39,10 @@ class CreateTicketRequest(BaseModel):
     # and parented tasks, `parent_external_id` inherits the repo.
     repo_path: str | None = None
     github_repo: GitHubRepoRef | None = None
+    # Optional GitHub issue this ticket is being created from. When set,
+    # the server stamps the URL on the ticket row and (best-effort) leaves
+    # a comment + 'pravi-imported' label on the issue.
+    github_issue: GitHubIssueRef | None = None
     domain_name: str | None = None
     base_ref: str = "main"
     cleanup_worktree: bool = False
@@ -77,6 +81,8 @@ class TicketOut(BaseModel):
     # GitHub PR — set after the push+PR activity runs successfully.
     pr_number: int | None = None
     pr_url: str | None = None
+    # Source GitHub issue (if imported via the /issues page).
+    github_issue_url: str | None = None
     # Per-ticket cumulative spend cap (USD). Null = inherit from parent /
     # env default / unlimited. See /tickets/{id}/cost-rollup for the
     # effective value after walking the chain.
@@ -191,6 +197,9 @@ class RunOut(BaseModel):
 class ClarificationQuestionOut(BaseModel):
     text: str
     why: str = ""
+    # When present, the UI offers preset answers as radio buttons (the user
+    # can still write in their own). Empty list = open-ended question.
+    options: list[str] = []
 
 
 class PersistedClarificationOut(BaseModel):
@@ -293,6 +302,38 @@ class GitHubConnectionOut(BaseModel):
     created_at: datetime
 
 
+class GitHubIssueLabelOut(BaseModel):
+    name: str
+    color: str | None = None
+
+
+class GitHubIssueOut(BaseModel):
+    """One issue from the issues-list endpoint. Filters out pull requests."""
+
+    number: int
+    title: str
+    body: str = ""
+    state: str = "open"
+    html_url: str | None = None
+    user_login: str | None = None
+    user_avatar_url: str | None = None
+    labels: list[GitHubIssueLabelOut] = []
+    comments: int = 0
+    updated_at: str | None = None
+    created_at: str | None = None
+
+
+class GitHubIssueRef(BaseModel):
+    """Where a ticket came from on the GitHub side. When attached to a
+    create-ticket request, the server best-effort comments + labels the
+    issue after the ticket lands, and stamps the URL on the ticket row."""
+
+    owner: str
+    name: str
+    number: int
+    html_url: str | None = None
+
+
 class GitHubRepoOut(BaseModel):
     """One repo from `/api/auth/github/repos/search`.
 
@@ -382,6 +423,33 @@ class DecomposeApproveOut(BaseModel):
 
     feature_external_ids: list[str]
     task_external_ids: list[str]
+
+
+class AgentDraftOut(BaseModel):
+    """Latest agent draft (decompose or plan) for a ticket — what the UI polls.
+
+    `kind` is "decompose" or "plan". `payload` shape varies:
+      - decompose: {"features": [{title, description, domain, depends_on,
+                                  tasks: [{title, description}]}, ...]}
+      - plan:      {"plan_md": "...", "domain_name": "..."}
+    `raw_md` is the streamed architect output (markdown + tool-use comment
+    markers the UI extracts as a live activity feed).
+    """
+
+    id: int
+    ticket_id: int
+    kind: str
+    status: str
+    raw_md: str
+    payload: dict
+    prompt_version: str | None
+    num_turns: int | None
+    duration_ms: int | None
+    total_cost_usd: float | None
+    error: str | None
+    started_at: datetime | None
+    completed_at: datetime | None
+    updated_at: datetime
 
 
 class RunEventOut(BaseModel):

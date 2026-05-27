@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from textwrap import dedent
 
-VERSION = "architect/clarify/v1"
+VERSION = "architect/clarify/v2"
 
 
 def _domains_block(domains):
@@ -76,13 +76,25 @@ def system_prompt(
         questions:
           - text: "Concrete question ending in ?"
             why: "One sentence: what choice this question gates."
-          - text: "..."
-            why: "..."
+          - text: "Question with a small, well-defined choice set?"
+            why: "Why this matters."
+            options:
+              - "Option A — what it implies"
+              - "Option B — what it implies"
+              - "Option C — what it implies"
         ```
 
         Constraints:
           - Top-level key is exactly `questions` (a list).
           - Each question has `text` (non-empty) and `why` (non-empty).
+          - `options` is OPTIONAL. Include it ONLY when there's a small
+            (2–5), well-defined, mutually-exclusive choice set whose
+            members you can enumerate confidently. Each option should be a
+            short phrase the user can pick at a glance. Do NOT invent
+            options just to populate the field — open-ended questions
+            should omit `options` entirely.
+          - The UI always lets the user type a write-in answer too, so
+            you don't need a catch-all "Other" option.
           - Output `questions: []` if nothing is worth asking — do NOT
             invent questions to pad the list.
 

@@ -54,6 +54,16 @@ export function NewTicketPage() {
     enabled: !!parentId,
   });
 
+  // Parent's cost rollup — used to clamp the cost-ceiling input so a child
+  // can't promise more budget than the epic (or env default) actually has
+  // left. Walks the full chain on the server.
+  const parentRollupQ = useQuery({
+    queryKey: ["cost-rollup", parentId],
+    queryFn: () => api.costRollup(parentId!),
+    enabled: !!parentId,
+    staleTime: 10_000,
+  });
+
   // Derive kind. If a parent is loaded, default to that parent's allowed child.
   // Otherwise honour ?kind=, else "task".
   const kind: TicketKind = useMemo(() => {
@@ -143,8 +153,17 @@ export function NewTicketPage() {
 
   const ceilingTrim = ceilingUsd.trim();
   const ceilingParsed = ceilingTrim === "" ? null : Number(ceilingTrim);
-  const ceilingInvalid =
+  const ceilingNegative =
     ceilingTrim !== "" && (Number.isNaN(ceilingParsed) || (ceilingParsed as number) < 0);
+  // Parent's effective remaining caps the child — server enforces it at run
+  // time but it's a better UX to refuse here than to land a phantom budget.
+  const parentRemaining = parentRollupQ.data?.effective_remaining_usd ?? null;
+  const ceilingExceedsParent =
+    parentRemaining !== null &&
+    ceilingParsed !== null &&
+    !ceilingNegative &&
+    (ceilingParsed as number) > parentRemaining;
+  const ceilingInvalid = ceilingNegative || ceilingExceedsParent;
 
   const githubRepoRef: GitHubRepoRef | undefined = useMemo(() => {
     if (!githubRepo || !githubRepo.clone_url) return undefined;
@@ -232,7 +251,7 @@ export function NewTicketPage() {
       ) : null}
 
       <form
-        className="mt-8 grid gap-5"
+        className="mt-8 grid grid-cols-1 gap-5"
         onSubmit={(e) => {
           e.preventDefault();
           if (canSubmit) createMut.mutate();
@@ -384,11 +403,13 @@ export function NewTicketPage() {
         <Field
           label="Cost ceiling (USD)"
           hint={
-            inheritedFromParent
-              ? "Leave blank to inherit from the parent. Set a number to give this child its own cap."
-              : kind === "task"
-                ? "Optional cumulative cap across all runs of this task. Blank = env default / unlimited."
-                : "Optional cap across every descendant task. Lets you bound an entire epic/feature."
+            inheritedFromParent && parentRemaining !== null
+              ? `Parent has $${parentRemaining.toFixed(2)} remaining. Leave blank to inherit; set a number to give this child its own (tighter) cap.`
+              : inheritedFromParent
+                ? "Leave blank to inherit from the parent. Set a number to give this child its own cap."
+                : kind === "task"
+                  ? "Optional cumulative cap across all runs of this task. Blank = env default / unlimited."
+                  : "Optional cap across every descendant task. Lets you bound an entire epic/feature."
           }
         >
           <input
@@ -396,14 +417,20 @@ export function NewTicketPage() {
             inputMode="decimal"
             value={ceilingUsd}
             onChange={(e) => setCeilingUsd(e.target.value)}
-            placeholder="e.g. 20"
+            placeholder={
+              parentRemaining !== null ? `≤ ${parentRemaining.toFixed(2)}` : "e.g. 20"
+            }
             className={`${inputClasses} tabular-nums ${
               ceilingInvalid ? "border-rose-400/40" : ""
             }`}
           />
-          {ceilingInvalid ? (
+          {ceilingNegative ? (
             <span className="block text-xs text-rose-400 mt-1.5">
               Must be a non-negative number, or blank.
+            </span>
+          ) : ceilingExceedsParent ? (
+            <span className="block text-xs text-rose-400 mt-1.5">
+              Parent has ${parentRemaining!.toFixed(2)} remaining — child can't exceed that.
             </span>
           ) : null}
         </Field>

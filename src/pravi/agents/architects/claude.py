@@ -12,6 +12,7 @@ from claude_agent_sdk import (
     ClaudeSDKError,
     ResultMessage,
     TextBlock,
+    ToolUseBlock,
     query,
 )
 
@@ -79,6 +80,41 @@ class _StreamBuf:
         )
 
 
+_PROGRESS_MARKER = "<!--pravi-progress:"
+
+
+def _summarize_tool_input(name: str, payload: dict[str, object] | None) -> str:
+    """Short, log-friendly summary of a tool call for the UI progress feed.
+
+    The UI parses these out of `raw_md` and renders them as a list of "what
+    the agent is doing right now" — so the summary needs to be tight (one
+    line, ≤120 chars) and readable, not a full JSON dump.
+    """
+    if not payload:
+        return name
+    if name == "Read":
+        path = str(payload.get("file_path") or "")
+        return path[-100:] if path else name
+    if name == "Grep":
+        pattern = str(payload.get("pattern") or "")
+        path = payload.get("path") or payload.get("glob") or ""
+        return f"{pattern}  ({path})" if path else pattern
+    if name == "Glob":
+        return str(payload.get("pattern") or name)
+    if name == "WebFetch":
+        return str(payload.get("url") or name)
+    return name
+
+
+def _progress_line(name: str, payload: dict[str, object] | None) -> str:
+    summary = _summarize_tool_input(name, payload).replace("\n", " ").strip()
+    if len(summary) > 120:
+        summary = summary[:117] + "…"
+    # Comment so it survives in `raw_md` without affecting the markdown
+    # render OR the YAML parser. The UI extracts these via regex.
+    return f"\n{_PROGRESS_MARKER} {name}|{summary} -->\n"
+
+
 class ClaudeArchitect:
     """Implements `agents.protocols.Architect` via claude-agent-sdk.
 
@@ -142,6 +178,7 @@ class ClaudeArchitect:
         result_msg: ResultMessage | None = None
         errors: list[str] = []
         start = time.monotonic()
+        seen_tool_ids: set[str] = set()
 
         log.info(
             "architect.draft.starting",
@@ -171,6 +208,12 @@ class ClaudeArchitect:
                             delta = buf.feed(i, block.text)
                             if delta and on_text is not None:
                                 await on_text(delta)
+                        elif isinstance(block, ToolUseBlock):
+                            if block.id in seen_tool_ids:
+                                continue
+                            seen_tool_ids.add(block.id)
+                            if on_text is not None:
+                                await on_text(_progress_line(block.name, block.input))
                 elif isinstance(msg, ResultMessage):
                     result_msg = msg
                 if msg_count % 25 == 0:
@@ -192,6 +235,15 @@ class ClaudeArchitect:
         except ClaudeSDKError as e:
             errors.append(f"SDK error: {type(e).__name__}: {e}")
             log.error("architect.claude.sdk_error", error=str(e))
+        except Exception as e:
+            # Salvage post-result SDK errors (see decompose for context).
+            if result_msg is None:
+                raise
+            log.warning(
+                "architect.claude.draft_post_result_error",
+                error=str(e),
+                type=type(e).__name__,
+            )
 
         duration_ms = int((time.monotonic() - start) * 1000)
         plan_md = _extract_plan(
@@ -271,6 +323,7 @@ class ClaudeArchitect:
         result_msg: ResultMessage | None = None
         errors: list[str] = []
         start = time.monotonic()
+        seen_tool_ids: set[str] = set()
 
         log.info(
             "architect.decompose.starting",
@@ -301,6 +354,12 @@ class ClaudeArchitect:
                             delta = buf.feed(i, block.text)
                             if delta and on_text is not None:
                                 await on_text(delta)
+                        elif isinstance(block, ToolUseBlock):
+                            if block.id in seen_tool_ids:
+                                continue
+                            seen_tool_ids.add(block.id)
+                            if on_text is not None:
+                                await on_text(_progress_line(block.name, block.input))
                 elif isinstance(msg, ResultMessage):
                     result_msg = msg
                 if msg_count % 25 == 0:
@@ -323,6 +382,18 @@ class ClaudeArchitect:
         except ClaudeSDKError as e:
             errors.append(f"SDK error: {type(e).__name__}: {e}")
             log.error("architect.claude.decompose_sdk_error", error=str(e))
+        except Exception as e:
+            # The SDK occasionally raises a generic Exception ("returned an
+            # error result: success") AFTER it has already emitted the final
+            # ResultMessage. If we've already captured a result we can salvage
+            # the run; otherwise the error is real and bubbles up.
+            if result_msg is None:
+                raise
+            log.warning(
+                "architect.claude.decompose_post_result_error",
+                error=str(e),
+                type=type(e).__name__,
+            )
 
         duration_ms = int((time.monotonic() - start) * 1000)
         raw_md = _extract_plan(
@@ -393,6 +464,7 @@ class ClaudeArchitect:
         result_msg: ResultMessage | None = None
         errors: list[str] = []
         start = time.monotonic()
+        seen_tool_ids: set[str] = set()
 
         log.info(
             "architect.clarify.starting",
@@ -422,6 +494,16 @@ class ClaudeArchitect:
                             delta = buf.feed(i, block.text)
                             if delta and on_text is not None:
                                 await on_text(delta)
+                        elif isinstance(block, ToolUseBlock):
+                            # Surface "what the agent is doing" as a comment
+                            # marker so the UI can render a live progress feed
+                            # (the YAML parser ignores anything outside the
+                            # fenced block).
+                            if block.id in seen_tool_ids:
+                                continue
+                            seen_tool_ids.add(block.id)
+                            if on_text is not None:
+                                await on_text(_progress_line(block.name, block.input))
                 elif isinstance(msg, ResultMessage):
                     result_msg = msg
                 # With streaming on, message count explodes — log less often.
@@ -445,6 +527,15 @@ class ClaudeArchitect:
         except ClaudeSDKError as e:
             errors.append(f"SDK error: {type(e).__name__}: {e}")
             log.error("architect.claude.clarify_sdk_error", error=str(e))
+        except Exception as e:
+            # Salvage post-result SDK errors (see decompose for context).
+            if result_msg is None:
+                raise
+            log.warning(
+                "architect.claude.clarify_post_result_error",
+                error=str(e),
+                type=type(e).__name__,
+            )
 
         duration_ms = int((time.monotonic() - start) * 1000)
         raw_md = _extract_plan(

@@ -112,6 +112,11 @@ class ClarifyRequest:
 class ClarificationQuestion:
     text: str
     why: str = ""
+    # Optional preset answers. Empty list means "free-text question". When
+    # present, the UI renders radio buttons; the user can still type a write-
+    # in answer if none of the presets fit. The architect proposes these
+    # when there's a small, well-defined choice set worth offering.
+    options: list[str] = field(default_factory=list)
 
 
 @dataclass
