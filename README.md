@@ -2,32 +2,75 @@
 
 Agentic feature builder for domain-driven repos, powered by Claude.
 
-**Status:** Slice 1B (web) — architect drafts plans, human reviews/edits in a React UI (Markdown editor + live preview), approve/cancel buttons signal a waiting FeatureWorkflow. Live status streams over SSE.
+**Status:** Working POC. Connect a GitHub repo, browse its issues, decompose
+an epic into a dependency-aware feature/task tree, let the architect draft
+plans (or import work straight from an issue), then have a Claude dev agent
+build it in an isolated worktree and open a draft PR — all from a React UI.
 
 ## What it is
 
-`pravi` lets you pick up GitHub issues, have a Claude agent plan + develop them inside a
-per-ticket git worktree, run domain tests, and open a draft PR for human review.
+`pravi` turns an idea (or a GitHub issue) into shipped code:
 
-- **Humans gate** the *plan* and the *final PR merge*.
-- **Agents are autonomous** for develop, review, test, and analyze.
-- **Domain-driven**: each developer agent is scoped to a single domain declared in the
-  target repo's `.builder/domains.yaml`.
+1. **Plan** — the architect agent (Claude, read-only) clarifies, decomposes an
+   epic into features + tasks, and drafts per-task implementation plans.
+2. **Build** — a Claude dev agent (claude-agent-sdk) executes the approved plan
+   inside a per-ticket git worktree, runs domain tests, and pushes a draft PR.
+3. **Review** — a human reviews the plan up front and the PR at the end.
 
-See `/Users/cavanpage/.claude/plans/ok-i-just-initialized-zesty-fountain.md` for the
-full implementation plan.
+Principles:
+
+- **Humans gate** the *plan* and the *final PR merge*. Everything between —
+  develop, review, test, analyze — is autonomous.
+- **Domain-driven**: each dev agent is scoped to a single domain declared in
+  the target repo's `.builder/domains.yaml`.
+- **Nothing is lost to a closed tab**: every agent kickoff (clarify, decompose,
+  plan draft) runs as a backgrounded, DB-persisted job with live progress that
+  the UI polls — closing the tab or navigating away never cancels a run.
+- **LLM-agnostic architect**: defaults to Claude via claude-agent-sdk, but the
+  architect can run on any LiteLLM-supported provider. The dev agent is
+  Claude-only (it needs the full tool loop).
+
+## Capabilities
+
+**Hierarchy & planning**
+- Epic → Feature → Task tree. Epics auto-decompose into features + tasks via the
+  architect; features can declare dependencies, rendered as a topological
+  **roadmap** (parallelizable "waves").
+- **Clarify** step: on epic creation a background job gathers targeted
+  questions (some multiple-choice) before decomposition. Runs on a fast model
+  (Haiku by default) and streams its activity live.
+- Cost **budget ceilings** per ticket, inherited down the Epic → Feature → Task
+  chain and enforced before each dev run (and surfaced as remaining-budget
+  hints + validation in the UI).
+
+**GitHub integration** (OAuth, in-UI)
+- Connect GitHub from the header; search your repos and pick one when creating a
+  ticket (lazily cloned on first use).
+- Browse a repo's **issues** at `/issues` and convert any of them into an epic,
+  feature, or task — pravi comments + labels (`pravi-imported`) back on the
+  source issue for traceability.
+- On a successful dev run, pravi pushes the branch and opens a **draft PR**.
+
+**Web UI** (React + Vite + Tailwind)
+- Home dashboard with persisted view state (kind filter / sort / search).
+- Markdown plan editor with live preview; approve/cancel buttons signal the
+  workflow.
+- Live status over SSE; live "what the agent is doing" activity feeds during
+  clarify / decompose / plan drafting.
 
 ## Stack
 
 - Python 3.11+, [uv](https://docs.astral.sh/uv/)
 - [Temporal](https://temporal.io/) for durable workflow orchestration
-- [LangGraph](https://langchain-ai.github.io/langgraph/) (later slices) for agent state
-- [claude-agent-sdk](https://github.com/anthropics/claude-agent-sdk-python) (later slices)
-  as the developer's filesystem-mutating executor
+- [claude-agent-sdk](https://github.com/anthropics/claude-agent-sdk-python) — the
+  dev agent's filesystem-mutating executor (read-only tool subset for the
+  architect)
+- [LiteLLM](https://docs.litellm.ai/) — optional alternative architect backend
 - Postgres for app state (SQLAlchemy 2.x async + Alembic)
+- FastAPI + SSE backing a React 18 + TypeScript + Vite + Tailwind UI (React Query)
 - Typer CLI (`pravi`)
 
-## Quickstart (Slice 0)
+## Quickstart
 
 ```bash
 # Install
@@ -42,139 +85,128 @@ docker compose up -d
 # Apply DB migrations
 uv run alembic upgrade head
 
-# Authentication for Claude: either ANTHROPIC_API_KEY in .env,
-# or be logged in via Claude Code (the SDK shells out to the local `claude` CLI).
+# Config — copy the example and fill in what you need
+cp .env.example .env
+```
 
-# In one terminal: run the features worker (workflow orchestration + git/github)
+**Authentication for Claude** — either `ANTHROPIC_API_KEY` in `.env` (or the
+shell), or be logged in via `claude` (the SDK falls back to your Pro/Max
+session). See `src/pravi/config.py` for the resolution order.
+
+**GitHub (optional but recommended)** — register an OAuth App at
+<https://github.com/settings/developers> with callback
+`http://localhost:8765/api/auth/github/callback`, then set
+`PRAVI_GITHUB_OAUTH_CLIENT_ID` + `PRAVI_GITHUB_OAUTH_CLIENT_SECRET` in `.env`.
+This unlocks repo search, issue browsing/import, and auto-PR.
+
+Then run the three processes:
+
+```bash
+# T1 — features worker (orchestration + cheap git/github activities)
 uv run python -m pravi.worker --queue features
 
-# In another: run the LLM worker (caps concurrent dev-agent runs at $$$)
+# T2 — LLM worker (caps concurrent dev-agent runs to bound $$$)
 uv run python -m pravi.worker --queue llm --max-activities 2
 
-# In a third: kick a smoke workflow against blissful-infra
-cp .env.example .env
+# T3 — web API + UI
+uv run pravi web --port 8765           # serves web/dist if you've built it
+# …or for frontend hot-reload:
+cd web && npm install && npm run dev    # Vite at :5173, proxies /api → :8765
+```
+
+Open <http://localhost:8765> (or <http://localhost:5173> in dev). From there:
+connect GitHub → create an epic (or import a GitHub issue) → answer clarifying
+questions → decompose → open a task → draft + approve its plan → watch the dev
+agent build it and open a PR. Watch workflows in the Temporal UI at
+<http://localhost:8233> (filter by `RepoName`, `Domain`, `TicketId`,
+`PraviStatus`).
+
+## CLI
+
+The web UI is the primary surface, but the CLI covers scripted runs:
+
+```bash
+# Smoke test the worktree machinery (no LLM)
 uv run pravi ticket run --fake \
-  --repo /Users/cavanpage/repos/blissful-infra \
-  --domains-file ./examples/blissful-infra-domains.yaml \
+  --repo /path/to/repo --domains-file ./examples/blissful-infra-domains.yaml \
   --domain shared --base-ref dev \
   --smoke-command "git rev-parse --abbrev-ref HEAD"
-```
 
-This creates a worktree of blissful-infra at `~/.pravi/worktrees/<ticket-id>`,
-runs the smoke command inside it, and tears the worktree down (the branch is
-also removed for `--fake` runs). Open the Temporal UI at <http://localhost:8233>
-to watch. You can also filter workflows in the UI by `RepoName`, `Domain`,
-`TicketId`, or `PraviStatus`.
+# Run the dev agent against a task, keep the worktree to inspect
+uv run pravi dev "Create packages/shared/HELLO.md with one line 'hi'" \
+  --repo /path/to/repo --domains-file ./examples/blissful-infra-domains.yaml \
+  --domain shared --base-ref dev          # add --cleanup to tear down after
 
-## Run the dev agent (Slice 1A)
-
-`pravi dev` spins up a worktree, runs the claude-agent-sdk developer agent
-against the requested task, and keeps the worktree for you to inspect:
-
-```bash
-uv run pravi dev "Create a file packages/shared/HELLO.md with one line 'hi'" \
-  --repo /Users/cavanpage/repos/blissful-infra \
-  --domains-file ./examples/blissful-infra-domains.yaml \
-  --domain shared --base-ref dev
-# prints: ✓ success  turns=2  duration=4.7s  cost=$0.13
-# worktree preserved: ~/.pravi/worktrees/dev-<uuid>
-#   inspect with: cd ... && git diff dev
-
-# add --cleanup to tear down worktree + branch when done
-uv run pravi dev "..." --cleanup ...
-```
-
-The dev activity runs on the **LLM queue** so its concurrency is capped by
-`--max-activities` on the LLM worker. Per-run hard limits (wall clock, turns,
-$ budget) come from `PRAVI_DEV_MAX_*` env vars — see `.env.example`.
-
-## Full ticket lifecycle (Slice 1B)
-
-The primary surface is the web UI; `pravi plan` CLI is still there for
-scripted runs.
-
-```bash
-# T1 — start the API server
-uv run pravi web --port 8765
-
-# T2 — for hot-reload during frontend dev:
-cd web && npm install && npm run dev   # Vite at http://localhost:5173, proxies /api → :8765
-
-# T3 — start a ticket; workflow blocks waiting for an approved plan
+# Start a ticket workflow (blocks waiting for an approved plan)
 uv run pravi ticket start TEST-001 \
   --title "Add a greeting README to shared" \
-  --body "Create packages/shared/HELLO.md with a one-line greeting." \
-  --repo /Users/cavanpage/repos/blissful-infra \
-  --domain shared --base-ref dev \
-  --domains-file ./examples/blissful-infra-domains.yaml \
-  --detach
-```
+  --body  "Create packages/shared/HELLO.md with a one-line greeting." \
+  --repo /path/to/repo --domain shared --base-ref dev \
+  --domains-file ./examples/blissful-infra-domains.yaml --detach
 
-Then open http://localhost:5173/tickets/TEST-001 (or http://localhost:8765/tickets/TEST-001
-if you've run `npm run build`). The page:
-
-- Loads the ticket, shows title / description / current status
-- "Draft plan with architect" button — runs Claude in read-only mode, returns
-  Markdown
-- Split-pane editor: left = textarea, right = rendered preview
-- "Approve & signal workflow" → persists Plan, signals the workflow
-- Live SSE status: `waiting_for_plan` → `running_dev` → `done`
-- "Cancel workflow" — sends the cancel signal
-
-**Fallback CLI** (no editor needed, useful for scripts):
-```bash
+# Draft + approve a plan from the terminal ($EDITOR fallback for the web UI)
 uv run pravi plan TEST-001 --no-editor \
-  --repo /Users/cavanpage/repos/blissful-infra \
-  --domains-file ./examples/blissful-infra-domains.yaml
+  --repo /path/to/repo --domains-file ./examples/blissful-infra-domains.yaml
+
+uv run pravi ticket list-domains --repo /path/to/repo   # inspect a repo's domains
 ```
 
-What happens:
-1. `ticket start` creates `Repo`+`Ticket` rows and launches
-   `FeatureWorkflow`, which immediately blocks on
-   `workflow.wait_condition(plan_id is not None)`.
-2. `pravi plan` runs the **architect agent** (Claude, read-only — only
-   `Read`/`Grep`/`Glob`/`WebFetch`), drafts a structured Markdown plan with
-   Summary / Approach / Changes / Tests / Risks, opens it in `$EDITOR`,
-   prompts to approve/revise/cancel.
-3. On approve: writes `Plan` row, sends `approve_plan(plan_id)` signal.
-4. Workflow wakes, loads the plan, creates a worktree, runs the dev agent
-   on the LLM queue with the plan as the task, updates ticket status
-   through `planning → plan_approved → in_progress → pr_open`.
+Per-run hard limits (wall clock, turns, $ budget) for the dev agent come from
+`PRAVI_DEV_MAX_*`; architect budgets + per-mode model overrides from
+`PRAVI_ARCHITECT_*`. See `.env.example` and `src/pravi/config.py`.
 
-Watch any of it via the workflow's `@workflow.query current_status()` —
-the CLI tails it when run without `--detach`.
+## Lifecycle (task)
+
+1. `ticket start` (or creating a task in the UI) writes `Repo`+`Ticket` rows and
+   launches `FeatureWorkflow`, which blocks on
+   `workflow.wait_condition(plan_id is not None)`.
+2. The **architect agent** (Claude, read-only — `Read`/`Grep`/`Glob`/`WebFetch`)
+   drafts a structured Markdown plan (Summary / Approach / Changes / Tests /
+   Risks). This runs as a backgrounded, persisted draft; the UI polls it.
+3. On approve: writes a `Plan` row, sends the `approve_plan(plan_id)` signal.
+4. The workflow wakes, creates a worktree, runs the dev agent on the LLM queue,
+   advances status `planning → plan_approved → in_progress`, then pushes the
+   branch and opens a draft PR (`pr_open`) when commits exist + GitHub is
+   connected.
+
+Epics and features are organizational containers (no workflow runs); their
+tasks each boot a `FeatureWorkflow` lazily when you start them.
 
 ## Temporal organization
 
 - **Two task queues**: `pravi-features` (orchestration + cheap git/github
-  activities) and `pravi-llm` (token-burning activities, capped concurrency).
-  The dev activity (Slice 1+) routes to `pravi-llm`.
-- **Workflow IDs**: `feature-<repo-slug>-<ticket-id>` (e.g.
-  `feature-blissful-infra-42`). Uses `ALLOW_DUPLICATE_FAILED_ONLY` reuse
-  policy — re-running a ticket only succeeds if the prior run failed.
-- **Search attributes**: `RepoName`, `Domain`, `TicketId`, `PraviStatus` are
-  attached to every workflow for UI filtering. Registered by
-  `./scripts/setup-temporal.sh`.
+  activities) and `pravi-llm` (token-burning activities, capped concurrency via
+  `--max-activities`).
+- **Workflow IDs**: `feature-<repo-slug>-<ticket-id>`. Uses
+  `ALLOW_DUPLICATE_FAILED_ONLY` reuse policy — re-running a ticket only succeeds
+  if the prior run failed.
+- **Search attributes**: `RepoName`, `Domain`, `TicketId`, `PraviStatus` on every
+  workflow for UI filtering. Registered by `./scripts/setup-temporal.sh`.
 
 ## Layout
 
 ```
 src/pravi/
-├── cli/         # Typer: ticket run/start/list-domains, plan, dev, web
-├── api/         # FastAPI app (REST + SSE) backing the web UI
+├── cli/         # Typer: ticket run/start/list-domains, dev, plan, web
+├── api/         # FastAPI app (REST + SSE): routes, auth_routes (GitHub OAuth), schemas
 ├── workflows/   # Temporal: SmokeWorkflow, DevWorkflow, FeatureWorkflow
-├── activities/  # git, dev (claude-agent-sdk), db (ticket/plan I/O)
+├── activities/  # git, dev (claude-agent-sdk), db (ticket/plan I/O), pr (push + open PR)
+├── agents/
+│   ├── protocols.py     # Architect + DevAgent Protocols, shared dataclasses
+│   ├── factory.py       # get_architect() / get_dev_agent() provider dispatch
+│   ├── architects/      # claude.py, litellm.py, context.py, clarify/decompose parsers
+│   └── dev/             # claude.py (the only dev-agent impl)
+├── services/    # background jobs: clarification, agent_draft (decompose+plan), github
+├── budget/      # cost rollup + ceiling resolution across the hierarchy
 ├── sdk_runner/  # claude-agent-sdk wrapper with heartbeats + budget guardrails
-├── agents/      # architect (read-only Claude call); reviewer in Slice 2
 ├── domains/     # `.builder/domains.yaml` loader
-├── prompts/     # versioned prompts: dev/v1, architect/v1
-├── events/      # (Slice 2+) typed event bus
-├── db/          # SQLAlchemy models + Alembic
-├── tools/       # (Slice 2+) shared LangGraph tools
+├── prompts/     # versioned prompts: architect, clarify, decompose, developer
+├── db/          # SQLAlchemy models + Alembic migrations
 └── config.py
 
-web/             # Vite + React + TS plan-review UI
-├── src/pages/   # HomePage, TicketPlanPage
-├── src/components/  # PlanEditor (split-pane), StatusBadge
-└── src/lib/api.ts   # REST + SSE client (native EventSource)
+web/             # Vite + React + TS UI
+├── src/pages/       # HomePage, NewTicketPage, IssuesPage, TicketPlanPage, RunsPage
+├── src/components/  # DecomposePanel, RoadmapView, DependencyEditor, PlanEditor,
+│                    #   TicketInfoCard, BudgetMeter, GitHubConnectButton, LiveRunPanel
+└── src/lib/         # api.ts (REST + SSE), progressMarkers, useHomeViewState, useIssuesViewState
 ```
