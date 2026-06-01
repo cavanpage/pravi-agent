@@ -70,6 +70,11 @@ Principles:
 - FastAPI + SSE backing a React 18 + TypeScript + Vite + Tailwind UI (React Query)
 - Typer CLI (`pravi`)
 
+> **Why this stack (and not LangGraph, and is Temporal overkill?)** — see
+> [ADR 0001](docs/adr/0001-orchestration-temporal-no-langgraph.md) for the
+> orchestration decision, honest tradeoffs, and the "revisit when…" triggers
+> that would push us toward dropping Temporal or adding LangGraph.
+
 ## Quickstart
 
 ```bash
