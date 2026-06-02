@@ -123,6 +123,70 @@ async def _finalise_run_row(run_id: int, result: DevRunResult) -> None:
         row.error = "; ".join(result.errors)[:2000] if result.errors else None
 
 
+def _classify_failure(
+    *,
+    success: bool,
+    stop_reason: str | None,
+    errors: list[str],
+) -> tuple[str, str] | None:
+    """Classify *why* a dev run terminated unsuccessfully.
+
+    Returns ``(reason_code, human_message)`` for the UI to surface, or
+    ``None`` on a clean success. Pattern-matches error strings — not
+    perfect, but a single source of truth so the UI doesn't need to do
+    string-sniffing on its own.
+
+    Reason codes (stable; UI may key styling off them):
+      - ``quota_exhausted``     — Anthropic rate limit / Max-plan quota
+      - ``wall_timeout``        — our asyncio.wait_for(timeout=) fired
+      - ``budget_exhausted``    — any cost cap (pre-flight or per-run)
+      - ``max_turns_exhausted`` — SDK max_turns hit
+      - ``sdk_error``           — anything else thrown by the SDK
+      - ``unknown``             — failure with no error info we can read
+    """
+    if success:
+        return None
+
+    err_blob = " | ".join(errors).lower()
+
+    if any(s in err_blob for s in ("rate_limit", "rate limit", "429", "ratelimit", "quota")):
+        return (
+            "quota_exhausted",
+            "Hit Anthropic API quota or rate limit. If on Max/Pro, wait for "
+            "the 5-hour window to reset; if on the API, check your usage at "
+            "console.anthropic.com.",
+        )
+
+    if "wall-clock budget" in err_blob or "exceeded wall" in err_blob:
+        return (
+            "wall_timeout",
+            "Run exceeded the wall-clock limit. The agent didn't finish in "
+            "time — raise dev_max_wall_seconds or split the work.",
+        )
+
+    if stop_reason == "budget_exhausted" or "budget" in err_blob:
+        return (
+            "budget_exhausted",
+            "Hit the cost ceiling for this run. Raise the per-task "
+            "cost_ceiling_usd or its ancestor's, then retry.",
+        )
+
+    if stop_reason == "max_turns" or "max_turns" in err_blob:
+        return (
+            "max_turns_exhausted",
+            "Hit the max-turns iteration cap. The task may need to be "
+            "broken into smaller pieces.",
+        )
+
+    if errors:
+        return ("sdk_error", f"SDK error: {errors[0][:240]}")
+
+    return (
+        "unknown",
+        "Run failed without a clear reason. Check the events for details.",
+    )
+
+
 async def _refuse_for_budget(
     *,
     req: DevActivityRequest,
@@ -176,6 +240,10 @@ async def _refuse_for_budget(
                 "total_cost_usd": 0.0,
                 "budget_remaining_usd": budget_remaining,
                 "errors": [error_msg],
+                # Consistent with the main run_finished path so the UI's
+                # banner logic only has to read these two fields.
+                "failure_reason": "budget_exhausted",
+                "failure_message": error_msg,
             },
         )
     return DevActivityResult(
@@ -298,16 +366,28 @@ async def run_dev(req: DevActivityRequest) -> DevActivityResult:
 
     if req.ticket_id is not None and run_id is not None:
         await _finalise_run_row(run_id, result)
+        classified = _classify_failure(
+            success=result.success,
+            stop_reason=result.stop_reason,
+            errors=result.errors,
+        )
+        failure_reason = classified[0] if classified else None
+        failure_message = classified[1] if classified else None
+        # The event MESSAGE is what shows in the LiveRunPanel event tail —
+        # make it carry the actual reason so a glance tells the story.
+        if classified:
+            event_message = f"dev agent failed: {classified[1]}"
+        else:
+            event_message = (
+                f"dev agent finished: success=True, turns={result.num_turns}"
+            )
         async with session_scope() as session:
             await emit_event(
                 session,
                 ticket_id=req.ticket_id,
                 run_id=run_id,
                 kind=KIND_RUN_FINISHED,
-                message=(
-                    f"dev agent finished: success={result.success}, "
-                    f"turns={result.num_turns}"
-                ),
+                message=event_message,
                 payload={
                     "success": result.success,
                     "stop_reason": result.stop_reason,
@@ -315,6 +395,8 @@ async def run_dev(req: DevActivityRequest) -> DevActivityResult:
                     "duration_ms": result.duration_ms,
                     "total_cost_usd": result.total_cost_usd,
                     "errors": result.errors,
+                    "failure_reason": failure_reason,
+                    "failure_message": failure_message,
                 },
             )
 

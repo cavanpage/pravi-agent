@@ -62,12 +62,22 @@ export function LiveRunPanel({ externalId, maxCostUsd }: Props) {
       ? (ended ? new Date(ended).getTime() : Date.now()) - new Date(started).getTime()
       : 0;
     const lastToolUse = [...events].reverse().find((e) => e.kind === "tool_use");
+    // Failure metadata from the backend's _classify_failure. Persisted in
+    // the run_finished payload so refresh recovers it.
+    const success = (finished?.payload?.success as boolean | undefined) ?? true;
+    const failureReason =
+      (finished?.payload?.failure_reason as string | null | undefined) ?? null;
+    const failureMessage =
+      (finished?.payload?.failure_message as string | null | undefined) ?? null;
     return {
       turns: finalTurns,
       toolUses,
       cost: finalCost,
       elapsedMs,
       finished: !!finished,
+      success,
+      failureReason,
+      failureMessage,
       currentTool: lastToolUse?.message ?? null,
     };
   }, [events]);
@@ -90,7 +100,9 @@ export function LiveRunPanel({ externalId, maxCostUsd }: Props) {
           <span
             className={`size-1.5 rounded-full ${
               metrics.finished
-                ? "bg-emerald-400"
+                ? metrics.success
+                  ? "bg-emerald-400"
+                  : "bg-rose-400"
                 : connected
                   ? "bg-blue-400 animate-pulse"
                   : "bg-neutral-600"
@@ -100,7 +112,11 @@ export function LiveRunPanel({ externalId, maxCostUsd }: Props) {
             live run
           </h3>
           {metrics.finished ? (
-            <span className="text-[11px] text-emerald-400">finished</span>
+            metrics.success ? (
+              <span className="text-[11px] text-emerald-400">finished</span>
+            ) : (
+              <span className="text-[11px] text-rose-400">failed</span>
+            )
           ) : connected ? (
             <span className="text-[11px] text-neutral-500">streaming</span>
           ) : (
@@ -111,6 +127,14 @@ export function LiveRunPanel({ externalId, maxCostUsd }: Props) {
           <span className="text-[11px] text-rose-400 font-mono">{error}</span>
         ) : null}
       </header>
+
+      {/* Why-it-stopped banner — visible on refresh, not just live. */}
+      {metrics.finished && !metrics.success ? (
+        <FailureBanner
+          reason={metrics.failureReason}
+          message={metrics.failureMessage}
+        />
+      ) : null}
 
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-px bg-white/5">
         <Stat label="turns" value={String(metrics.turns)} />
@@ -154,6 +178,45 @@ export function LiveRunPanel({ externalId, maxCostUsd }: Props) {
         )}
       </div>
     </section>
+  );
+}
+
+// Visual styling per failure reason — keys match the backend's
+// _classify_failure reason codes in dev_activity.py.
+const REASON_STYLE: Record<
+  string,
+  { label: string; tone: "rose" | "amber" }
+> = {
+  quota_exhausted: { label: "Quota exhausted", tone: "rose" },
+  wall_timeout: { label: "Wall-clock timeout", tone: "amber" },
+  budget_exhausted: { label: "Budget exhausted", tone: "amber" },
+  max_turns_exhausted: { label: "Max turns reached", tone: "amber" },
+  sdk_error: { label: "SDK error", tone: "rose" },
+  unknown: { label: "Failed", tone: "rose" },
+};
+
+function FailureBanner({
+  reason,
+  message,
+}: {
+  reason: string | null;
+  message: string | null;
+}) {
+  const style = (reason && REASON_STYLE[reason]) || REASON_STYLE.unknown;
+  const tone = style.tone;
+  const klass =
+    tone === "rose"
+      ? "border-rose-400/20 bg-rose-400/[0.06] text-rose-200"
+      : "border-amber-400/20 bg-amber-400/[0.06] text-amber-200";
+  return (
+    <div className={`border-b ${klass} px-4 py-3`}>
+      <div className="text-[11px] uppercase tracking-[0.14em] font-semibold opacity-80">
+        {style.label}
+      </div>
+      <div className="text-sm mt-1 leading-relaxed">
+        {message || "No reason recorded."}
+      </div>
+    </div>
   );
 }
 
