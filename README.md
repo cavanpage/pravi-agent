@@ -1,4 +1,4 @@
-# pravi-builder-agent
+# pravi-agent
 
 Agentic feature builder for domain-driven repos, powered by Claude.
 
