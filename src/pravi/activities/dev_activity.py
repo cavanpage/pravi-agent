@@ -52,14 +52,20 @@ class DevActivityRequest:
     (which have no ticket) pass None and skip both.
     """
 
-    repo_path: str
+    # Working directory for the SDK. Today: the host filesystem path the
+    # `LocalWorktreeSandbox` provisioned. Future remote backends may bind-
+    # mount a container path with the same shape.
+    cwd: str
     repo_name: str
-    worktree_path: str
     domain_name: str
     domain_description: str
     domain_paths: list[str]
     task: str
     ticket_id: int | None = None
+    # Persona + stack framing for the dev-agent system prompt — see
+    # ADR 0004. None on each falls back to the generic prompt.
+    persona: str | None = None
+    stack: str | None = None
 
 
 @dataclass
@@ -85,10 +91,12 @@ def _build_request(req: DevActivityRequest) -> DevRunRequest:
         domain_name=req.domain_name,
         domain_description=req.domain_description,
         domain_paths=req.domain_paths,
-        cwd=req.worktree_path,
+        cwd=req.cwd,
+        persona=req.persona,
+        stack=req.stack,
     )
     return DevRunRequest(
-        cwd=req.worktree_path,
+        cwd=req.cwd,
         system_prompt=sp,
         user_prompt=req.task,
         max_wall_seconds=settings.dev_max_wall_seconds,
@@ -279,15 +287,15 @@ def _make_event_sink(ticket_id: int, run_id: int):
 
 @activity.defn
 async def run_dev(req: DevActivityRequest) -> DevActivityResult:
-    if not Path(req.worktree_path).is_dir():
-        raise FileNotFoundError(f"worktree missing: {req.worktree_path}")
+    if not Path(req.cwd).is_dir():
+        raise FileNotFoundError(f"worktree missing: {req.cwd}")
 
     sdk_req = _build_request(req)
     log.info(
         "dev_activity.start",
         repo=req.repo_name,
         domain=req.domain_name,
-        cwd=req.worktree_path,
+        cwd=req.cwd,
         ticket_id=req.ticket_id,
         max_wall_seconds=sdk_req.max_wall_seconds,
         max_turns=sdk_req.max_turns,
@@ -332,7 +340,7 @@ async def run_dev(req: DevActivityRequest) -> DevActivityResult:
                 ticket_id=req.ticket_id,
                 run_id=run_id,
                 kind=KIND_RUN_STARTED,
-                message=f"dev agent started in {req.worktree_path}",
+                message=f"dev agent started in {req.cwd}",
                 payload={
                     "domain": req.domain_name,
                     "prompt_version": DEV_PROMPT_VERSION,
@@ -422,21 +430,21 @@ async def run_dev(req: DevActivityRequest) -> DevActivityResult:
 def build_request_from_registry(
     *,
     repo_path: str,
-    worktree_path: str,
+    cwd: str,
     domain_name: str,
     task: str,
     ticket_id: int | None = None,
     domains_file: Path | None = None,
 ) -> DevActivityRequest:
     """Helper for callers (CLI, workflow) — looks up the domain and packages
-    the snapshot into a DevActivityRequest."""
+    the snapshot into a DevActivityRequest. `repo_path` is the main checkout
+    used to load `domains.yaml`; `cwd` is where the agent actually runs."""
     repo = Path(repo_path).expanduser().resolve()
     registry = DomainRegistry.load(repo, override_file=domains_file)
     domain = registry.get(domain_name)
     return DevActivityRequest(
-        repo_path=str(repo),
+        cwd=cwd,
         repo_name=repo.name,
-        worktree_path=worktree_path,
         domain_name=domain.name,
         domain_description=domain.description,
         domain_paths=list(domain.paths),

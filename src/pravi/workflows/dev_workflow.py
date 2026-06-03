@@ -63,13 +63,12 @@ class DevWorkflow:
             retry_policy=RetryPolicy(maximum_attempts=2),
         )
 
-        # The DevActivityRequest's worktree_path field is filled in here so
-        # the caller doesn't need to know it in advance — the worktree path
-        # comes from the worktree activity result.
+        # The DevActivityRequest's `cwd` is filled in here so the caller
+        # doesn't need to know it in advance — it comes from the worktree
+        # activity result.
         dev_req = DevActivityRequest(
-            repo_path=inp.dev_request.repo_path,
+            cwd=wt.path,
             repo_name=inp.dev_request.repo_name,
-            worktree_path=wt.path,
             domain_name=inp.dev_request.domain_name,
             domain_description=inp.dev_request.domain_description,
             domain_paths=inp.dev_request.domain_paths,

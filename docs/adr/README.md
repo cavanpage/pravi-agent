@@ -8,3 +8,5 @@ ADRs supersede older ones explicitly (status: Superseded by 000N).
 |------|--------------------------------------------------------------------------------------|----------|
 | 0001 | [Orchestration: Temporal, no LangGraph](0001-orchestration-temporal-no-langgraph.md) | Accepted |
 | 0002 | [LLM-agnostic architect, Claude-only dev](0002-llm-agnostic-architect-claude-only-dev.md) | Accepted |
+| 0003 | [Sandbox seam, no local mounts](0003-sandbox-seam-no-local-mounts.md)                | Accepted |
+| 0004 | [Agent personas](0004-agent-personas.md)                                             | Proposed |

@@ -4,7 +4,9 @@
 export interface Repo {
   id: number;
   name: string;
-  local_path: string;
+  /** Nullable since ADR 0003 — local repos populated lazily by the
+   * sandbox on first dev run. New repos start with `null` here. */
+  local_path: string | null;
   github_owner: string | null;
   github_name: string | null;
 }
@@ -39,6 +41,27 @@ export interface Ticket {
   pr_number: number | null;
   pr_url: string | null;
   github_issue_url: string | null;
+  /** ADR 0004 — what kind of work this is. Null = `other` (generic). */
+  persona: string | null;
+  /** ADR 0004 — what tech stack. Null = `unknown` (no extra skills hint). */
+  stack: string | null;
+}
+
+export type PersonaStatus = "active" | "coming_soon";
+
+export interface Persona {
+  slug: string;
+  name: string;
+  group: string;
+  status: PersonaStatus;
+  description: string;
+  baseline_skills: string[];
+}
+
+export interface Stack {
+  slug: string;
+  name: string;
+  additional_skills: string[];
 }
 
 export interface BudgetBreakdown {
@@ -188,6 +211,8 @@ export interface ClarificationQA {
 export interface DecomposedTask {
   title: string;
   description: string;
+  persona?: string | null;
+  stack?: string | null;
 }
 
 export interface DecomposedFeature {
@@ -196,6 +221,8 @@ export interface DecomposedFeature {
   domain: string | null;
   tasks: DecomposedTask[];
   depends_on: string[];
+  persona?: string | null;
+  stack?: string | null;
 }
 
 export interface RoadmapFeature {
@@ -324,6 +351,10 @@ export interface CreateTicketInput {
   parent_external_id?: string;
   // Optional per-ticket spend cap. Null/omitted = inherit / unlimited.
   cost_ceiling_usd?: number | null;
+  // ADR 0004 — agent framing. Both nullable; null persona = `other`;
+  // null stack = `unknown`.
+  persona?: string | null;
+  stack?: string | null;
 }
 
 export interface CreateTicketResult {
@@ -484,7 +515,11 @@ export const api = {
       body: JSON.stringify(input),
     }),
 
-  listRepos: () => jsonReq<Repo[]>("/api/repos"),
+  /** Full persona catalog — active + coming_soon. UI greys out the
+   * coming_soon ones; the decompose architect only sees active. */
+  listPersonas: () => jsonReq<Persona[]>("/api/personas"),
+
+  listStacks: () => jsonReq<Stack[]>("/api/stacks"),
 
   listDomainsForPath: (repoPath: string, domainsFile?: string) => {
     const params = new URLSearchParams({ repo_path: repoPath });

@@ -67,6 +67,11 @@ class DomainBrief:
 class DecomposedTask:
     title: str
     description: str = ""
+    # Persona + stack — see ADR 0004. The decompose architect picks
+    # from active personas; unknown / coming_soon slugs are kept but
+    # the dev agent falls back to generic at run time.
+    persona: str | None = None
+    stack: str | None = None
 
 
 @dataclass
@@ -79,6 +84,10 @@ class DecomposedFeature:
     # decompose-approve route resolves these to FeatureDependency rows.
     # Unresolvable titles → 400 at approve time.
     depends_on: list[str] = field(default_factory=list)
+    # Persona + stack — see ADR 0004. Inherited by tasks under this
+    # feature unless they override.
+    persona: str | None = None
+    stack: str | None = None
 
 
 @dataclass

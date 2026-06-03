@@ -34,18 +34,18 @@ with workflow.unsafe.imports_passed_through():
         DevActivityResult,
         run_dev,
     )
-    from pravi.activities.git_activity import (
-        CleanupRequest,
-        WorktreeInfo,
-        WorktreeRequest,
-        create_worktree,
-        remove_worktree,
-    )
     from pravi.activities.pr_activity import (
         PushAndOpenPRRequest,
         PushAndOpenPRResult,
         push_and_open_pr,
     )
+    from pravi.activities.sandbox_activity import (
+        CleanupRequest,
+        ProvisionRequest,
+        cleanup_sandbox,
+        provision_sandbox,
+    )
+    from pravi.agents.sandbox.protocols import SandboxHandle
 
 
 # Statuses surfaced via @workflow.query — keep these short, the CLI displays them.
@@ -71,7 +71,7 @@ class FeatureWorkflowInput:
 class FeatureWorkflowResult:
     ticket_id: int
     plan_id: int | None
-    worktree_path: str | None
+    sandbox_id: str | None  # opaque per-backend; "where did the work happen"
     branch: str | None
     dev: DevActivityResult | None
     pr: PushAndOpenPRResult | None
@@ -141,7 +141,7 @@ class FeatureWorkflow:
             return FeatureWorkflowResult(
                 ticket_id=ticket.ticket_id,
                 plan_id=None,
-                worktree_path=None,
+                sandbox_id=None,
                 branch=None,
                 dev=None,
                 pr=None,
@@ -166,15 +166,15 @@ class FeatureWorkflow:
 
         self._status = STATUS_RUNNING_DEV
         branch = f"pravi/{ticket.external_id}-{plan.domain_name}"
-        wt: WorktreeInfo = await workflow.execute_activity(
-            create_worktree,
-            WorktreeRequest(
-                repo_path=ticket.repo_local_path,
-                ticket_id=str(ticket.external_id),
+        handle: SandboxHandle = await workflow.execute_activity(
+            provision_sandbox,
+            ProvisionRequest(
+                repo_id=ticket.repo_id,
+                ticket_external_id=str(ticket.external_id),
                 branch=branch,
                 base_ref=inp.base_ref,
             ),
-            start_to_close_timeout=timedelta(minutes=2),
+            start_to_close_timeout=timedelta(minutes=5),
             retry_policy=RetryPolicy(maximum_attempts=2),
         )
 
@@ -188,9 +188,8 @@ class FeatureWorkflow:
             )
 
             dev_req = DevActivityRequest(
-                repo_path=ticket.repo_local_path,
+                cwd=handle.cwd,
                 repo_name=ticket.repo_name,
-                worktree_path=wt.path,
                 domain_name=plan.domain_name,
                 domain_description=inp.domain_description,
                 domain_paths=list(inp.domain_paths),
@@ -198,6 +197,10 @@ class FeatureWorkflow:
                 # Lets the activity persist a Run row + push live events on
                 # the per-ticket NOTIFY channel for <LiveRunPanel>.
                 ticket_id=ticket.ticket_id,
+                # Persona + stack framing — see ADR 0004. Null on each
+                # → generic dev prompt (today's behavior).
+                persona=ticket.persona,
+                stack=ticket.stack,
             )
             dev_result = await workflow.execute_activity(
                 run_dev,
@@ -208,7 +211,7 @@ class FeatureWorkflow:
                 retry_policy=RetryPolicy(maximum_attempts=1),
             )
         finally:
-            pass  # worktree cleanup moved below — we need it intact to push.
+            pass  # sandbox cleanup moved below — we need it intact to push.
 
         # Push + open PR if the dev step succeeded and committed something.
         pr_result: PushAndOpenPRResult | None = None
@@ -219,9 +222,7 @@ class FeatureWorkflow:
                     ticket_id=ticket.ticket_id,
                     ticket_external_id=ticket.external_id,
                     ticket_title=ticket.title,
-                    repo_path=ticket.repo_local_path,
-                    worktree_path=wt.path,
-                    branch=wt.branch,
+                    handle=handle,
                     base_ref=inp.base_ref,
                     pr_body=_build_pr_body(ticket=ticket, plan=plan),
                 ),
@@ -229,15 +230,11 @@ class FeatureWorkflow:
                 retry_policy=RetryPolicy(maximum_attempts=1),
             )
 
-        # Now the worktree's been used for the push; safe to remove if asked.
+        # Now the sandbox's been used for the push; safe to tear down if asked.
         if inp.cleanup_worktree:
             await workflow.execute_activity(
-                remove_worktree,
-                CleanupRequest(
-                    repo_path=ticket.repo_local_path,
-                    worktree_path=wt.path,
-                    delete_branch=None,
-                ),
+                cleanup_sandbox,
+                CleanupRequest(handle=handle, delete_branch=False),
                 start_to_close_timeout=timedelta(minutes=2),
                 retry_policy=RetryPolicy(maximum_attempts=3),
             )
@@ -263,8 +260,8 @@ class FeatureWorkflow:
         return FeatureWorkflowResult(
             ticket_id=ticket.ticket_id,
             plan_id=plan.plan_id,
-            worktree_path=wt.path,
-            branch=wt.branch,
+            sandbox_id=handle.sandbox_id,
+            branch=handle.branch,
             dev=dev_result,
             pr=pr_result,
             summary=(dev_result.summary if dev_result else "no dev result"),

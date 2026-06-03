@@ -11,7 +11,31 @@ from __future__ import annotations
 
 from textwrap import dedent
 
-VERSION = "architect/decompose/v1"
+from pravi.personas import ACTIVE_PERSONAS, KNOWN_STACKS
+
+VERSION = "architect/decompose/v2"
+
+
+def _personas_block() -> str:
+    """Render the active personas with a one-line description so the
+    architect can pick one per feature / task. Coming-soon personas are
+    intentionally excluded — see ADR 0004."""
+    lines: list[str] = []
+    for p in ACTIVE_PERSONAS:
+        lines.append(f"  - `{p.slug}` ({p.name}) — {p.description}")
+    return "\n".join(lines)
+
+
+def _stacks_block() -> str:
+    """Stack slugs the architect can reach for. Open-set — minting a new
+    slug for an unusual repo is fine; unknown slugs resolve to `unknown`
+    (no extra skills loaded)."""
+    lines: list[str] = []
+    for s in KNOWN_STACKS:
+        if s.slug == "unknown":
+            continue
+        lines.append(f"  - `{s.slug}` ({s.name})")
+    return "\n".join(lines)
 
 
 def _domains_block(domains):
@@ -44,6 +68,8 @@ def system_prompt(
         if default_domain
         else "No default domain — assign one per feature."
     )
+    personas_block = _personas_block()
+    stacks_block = _stacks_block()
     return dedent(
         f"""
         You are the architect agent for pravi, in **epic-decomposition** mode.
@@ -85,10 +111,14 @@ def system_prompt(
           - title: "Feature title"
             description: "What this feature does in plain language."
             domain: "shared"        # optional — omit to inherit default
+            persona: "backend"      # optional — see Personas + Stacks below
+            stack: "python-fastapi" # optional — see Personas + Stacks below
             depends_on: []          # titles of sibling features this depends on
             tasks:
               - title: "Task title"
                 description: "Concrete, file-specific description."
+                persona: "tester"   # optional — overrides feature persona
+                stack: "python-fastapi"
               - title: "..."
                 description: "..."
           - title: "..."
@@ -96,6 +126,29 @@ def system_prompt(
               - "Feature title"     # must be the exact title of another feature in this list
             ...
         ```
+
+        Personas + Stacks (ADR 0004):
+
+        Each feature and task may declare a `persona` and a `stack`. The
+        persona shapes the dev agent's system prompt; the stack
+        determines which Claude Skills get hinted. Tasks inherit from
+        their feature if they don't override.
+
+        Available personas (pick ONE per feature/task; OMIT the field
+        for generic work):
+{personas_block}
+
+        Stacks (open-set — mint a new slug if a feature is in a tech
+        not listed):
+{stacks_block}
+
+        Assignment guidance:
+          - Assign a persona when the work is genuinely role-shaped
+            (test-only changes → `tester`; doc-only → `tech_writer`).
+            For mixed work, leave persona unset.
+          - Stack is whatever tech the work is in. Tasks under a Python
+            FastAPI feature default to `python-fastapi`; flip them
+            individually if a task is in a different stack.
 
         3. Optionally a brief `## Risks` section after the YAML.
 

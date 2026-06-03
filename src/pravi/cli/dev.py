@@ -49,7 +49,7 @@ def dev(
     task: Annotated[str, typer.Argument(help="Task description for the dev agent.")],
     repo: Annotated[
         Path | None,
-        typer.Option(help="Target repo path. Defaults to first PRAVI_TARGET_REPOS entry."),
+        typer.Option(help="Target repo path (must be a git checkout)."),
     ] = None,
     domain: Annotated[
         str | None,
@@ -75,9 +75,7 @@ def dev(
     configure_logging(settings.log_level)
 
     if repo is None:
-        if not settings.target_repos:
-            raise typer.BadParameter("no --repo provided and PRAVI_TARGET_REPOS is empty")
-        repo = settings.target_repos[0]
+        raise typer.BadParameter("--repo is required")
     repo = repo.expanduser().resolve()
 
     registry = DomainRegistry.load(repo, override_file=domains_file)
@@ -88,7 +86,7 @@ def dev(
 
     dev_request = build_request_from_registry(
         repo_path=str(repo),
-        worktree_path="",  # filled in by the workflow from the worktree result
+        cwd="",  # filled in by the workflow from the sandbox handle
         domain_name=chosen.name,
         task=task,
         domains_file=domains_file,

@@ -15,6 +15,15 @@ from pravi.agents.protocols import DecomposedFeature, DecomposedTask
 _FENCED_YAML = re.compile(r"```ya?ml\s*\n(.*?)\n```", re.DOTALL | re.IGNORECASE)
 
 
+def _coerce_optional_str(v: object) -> str | None:
+    """Normalize a YAML scalar to `str | None`. Empty / whitespace → None
+    so the catalog defaults can take over."""
+    if v is None:
+        return None
+    s = str(v).strip()
+    return s or None
+
+
 def parse_decomposition(raw_md: str) -> tuple[list[DecomposedFeature], list[str]]:
     """Return (features, errors). On any failure, features is [] and errors
     is non-empty; raw_md stays available to the caller for UI editing."""
@@ -78,7 +87,14 @@ def parse_decomposition(raw_md: str) -> tuple[list[DecomposedFeature], list[str]
                 errors.append(f"features[{i}].tasks[{j}].title is required")
                 continue
             t_desc = str(t.get("description") or "").strip()
-            tasks.append(DecomposedTask(title=t_title, description=t_desc))
+            tasks.append(
+                DecomposedTask(
+                    title=t_title,
+                    description=t_desc,
+                    persona=_coerce_optional_str(t.get("persona")),
+                    stack=_coerce_optional_str(t.get("stack")),
+                )
+            )
         if tasks:
             features.append(
                 DecomposedFeature(
@@ -87,6 +103,8 @@ def parse_decomposition(raw_md: str) -> tuple[list[DecomposedFeature], list[str]
                     domain=domain,
                     tasks=tasks,
                     depends_on=depends_on,
+                    persona=_coerce_optional_str(f.get("persona")),
+                    stack=_coerce_optional_str(f.get("stack")),
                 )
             )
 

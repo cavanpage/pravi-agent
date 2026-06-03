@@ -1,10 +1,10 @@
 import os
 from pathlib import Path
-from typing import Annotated, Literal
+from typing import Literal
 
 import structlog
-from pydantic import AliasChoices, Field, field_validator
-from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
+from pydantic import AliasChoices, Field
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 log = structlog.get_logger(__name__)
 
@@ -30,26 +30,11 @@ class Settings(BaseSettings):
     # a ticket is created against a repo we haven't cloned yet (via the
     # "search GitHub" picker in the new-ticket form).
     clone_base: Path = Field(default=Path.home() / ".pravi" / "repos")
-    # `NoDecode` tells pydantic-settings to skip JSON-decoding for this
-    # field; the validator below parses the raw env string instead.
-    target_repos: Annotated[list[Path], NoDecode] = Field(default_factory=list)
-
-    @field_validator("target_repos", mode="before")
-    @classmethod
-    def _parse_target_repos(cls, v):
-        """Accept the comma-separated string form .env.example documents.
-
-        Pydantic-settings v2 requires JSON syntax (`["a", "b"]`) for env-
-        derived list fields by default; that's an unfriendly contract for
-        a value users hand-write in .env. We coerce a bare comma-separated
-        string into a list here. Empty / whitespace-only → []. Anything
-        already list-shaped passes through.
-        """
-        if v is None or v == "":
-            return []
-        if isinstance(v, str):
-            return [p.strip() for p in v.split(",") if p.strip()]
-        return v
+    # Where the dev agent's working directory is provisioned. See
+    # `agents/sandbox/` and ADR 0003. Today only "local" exists (host
+    # filesystem + git worktree); the seam is in place so adding "docker"
+    # or a remote sandbox impl later is a config flip, not a refactor.
+    sandbox_backend: Literal["local"] = "local"
     log_level: str = "INFO"
 
     # Architect-agent provider + budgets.

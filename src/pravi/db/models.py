@@ -68,7 +68,10 @@ class Repo(Base, TimestampMixin):
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
     name: Mapped[str] = mapped_column(String(255), unique=True, nullable=False)
-    local_path: Mapped[str] = mapped_column(Text, nullable=False)
+    # Nullable now (ADR 0003): new GitHub-imported repos populate this lazily
+    # when the sandbox provisions for the first dev run. Legacy rows have it
+    # set up-front. Treat empty/null as "ask the sandbox to resolve me".
+    local_path: Mapped[str | None] = mapped_column(Text, nullable=True)
     github_owner: Mapped[str | None] = mapped_column(String(255), nullable=True)
     github_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
 
@@ -92,6 +95,12 @@ class Ticket(Base, TimestampMixin):
     # If imported from a GitHub issue: the original issue URL. Surfaced in
     # the UI as a "from GitHub #N" chip linking back to the source.
     github_issue_url: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Agent personas + stack — see ADR 0004. Both nullable; null persona
+    # resolves to `other` (generic prompt), null stack to `unknown` (no
+    # additional skill hint). Decompose architect assigns; the dev
+    # agent's system prompt is parameterized by both.
+    persona: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    stack: Mapped[str | None] = mapped_column(String(64), nullable=True)
 
     # Hierarchy. `kind` defaults to "task" so existing rows are unaffected by
     # the migration. `parent_id` is nullable: epics never have one, features

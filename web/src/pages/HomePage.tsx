@@ -2,9 +2,10 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
-import { api, Ticket, TicketKind } from "../lib/api";
+import { api, Persona, Ticket, TicketKind } from "../lib/api";
 import { SortKey, useHomeViewState } from "../lib/useHomeViewState";
 import { GitHubConnectButton } from "../components/GitHubConnectButton";
+import { PersonaChip } from "../components/PersonaChip";
 import { StatusBadge } from "../components/StatusBadge";
 
 // Tickets in these statuses need human action on the plan.
@@ -98,6 +99,14 @@ export function HomePage() {
     refetchInterval: 5_000, // home page is a dashboard — poll for new arrivals
   });
 
+  // Catalog lookup for the PersonaChip — fetched once, very cacheable.
+  const personasQ = useQuery({
+    queryKey: ["personas"],
+    queryFn: () => api.listPersonas(),
+    staleTime: 5 * 60_000,
+  });
+  const personaCatalog = personasQ.data ?? null;
+
   const bulkDeleteMut = useMutation({
     mutationFn: (ids: string[]) => api.bulkDeleteTickets(ids),
     onSuccess: (res) => {
@@ -174,7 +183,7 @@ export function HomePage() {
       <header className="flex items-center justify-between">
         <div className="flex items-center gap-3">
           <div className="size-8 rounded-xl bg-gradient-to-br from-blue-400 to-indigo-600 shadow-lg shadow-blue-500/30 ring-1 ring-white/10" />
-          <h1 className="text-3xl font-semibold tracking-tight">pravi</h1>
+          <h1 className="text-3xl font-semibold tracking-tight">pravi agent</h1>
         </div>
         <div className="flex items-center gap-3">
           {ticketsQ.isFetching ? (
@@ -233,6 +242,7 @@ export function HomePage() {
         selected={selected}
         onToggleSelected={toggleSelected}
         onToggleAll={toggleMany}
+        personaCatalog={personaCatalog}
       />
 
       <section className="mt-8">
@@ -263,6 +273,7 @@ export function HomePage() {
                 ticket={t}
                 selected={selected.has(t.external_id)}
                 onToggleSelected={toggleSelected}
+                personaCatalog={personaCatalog}
               />
             ))}
           </ul>
@@ -282,6 +293,7 @@ export function HomePage() {
         selected={selected}
         onToggleSelected={toggleSelected}
         onToggleAll={toggleMany}
+        personaCatalog={personaCatalog}
       />
 
       {selected.size > 0 ? (
@@ -511,6 +523,7 @@ function Section({
   selected,
   onToggleSelected,
   onToggleAll,
+  personaCatalog,
 }: {
   title: string;
   empty: string;
@@ -523,6 +536,8 @@ function Section({
   selected?: Set<string>;
   onToggleSelected?: (externalId: string) => void;
   onToggleAll?: (externalIds: string[]) => void;
+  /** Persona catalog for the per-row chip; null while still loading. */
+  personaCatalog?: Persona[] | null;
 }) {
   const header = (children: React.ReactNode) => (
     <div className="flex items-center gap-2 mb-3">
@@ -550,6 +565,7 @@ function Section({
               emphasised={emphasised}
               selected={selected?.has(t.external_id) ?? false}
               onToggleSelected={onToggleSelected}
+              personaCatalog={personaCatalog}
             />
           ))}
         </ul>
@@ -608,11 +624,13 @@ function TicketRow({
   emphasised,
   selected = false,
   onToggleSelected,
+  personaCatalog,
 }: {
   ticket: Ticket;
   emphasised?: boolean;
   selected?: boolean;
   onToggleSelected?: (externalId: string) => void;
+  personaCatalog?: Persona[] | null;
 }) {
   // When selected, override the per-emphasis hover state with a clear
   // selected look so the user can tell at a glance what they've picked.
@@ -645,7 +663,16 @@ function TicketRow({
           {ticket.kind}
         </span>
         <div className="flex-1 min-w-0">
-          <div className="font-medium truncate text-neutral-100">{ticket.title}</div>
+          <div className="font-medium truncate text-neutral-100 flex items-center gap-2">
+            <span className="truncate">{ticket.title}</span>
+            {ticket.persona || ticket.stack ? (
+              <PersonaChip
+                persona={ticket.persona}
+                stack={ticket.stack}
+                catalog={personaCatalog ?? null}
+              />
+            ) : null}
+          </div>
           <div className="text-[11px] text-neutral-500 font-mono truncate mt-0.5">
             {ticket.external_id} · {ticket.repo.name} · {ticket.domain_name || "—"}
             {ticket.child_count > 0

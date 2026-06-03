@@ -42,6 +42,7 @@ from pravi.api.schemas import (
     DecomposeDraftRequest,
     DomainOut,
     PersistedClarificationOut,
+    PersonaOut,
     PlanApproveOut,
     PlanApproveRequest,
     PlanDraftRequest,
@@ -51,6 +52,7 @@ from pravi.api.schemas import (
     RoadmapWaveOut,
     RunEventOut,
     RunOut,
+    StackOut,
     TicketBudgetUpdate,
     TicketOut,
     WorkflowStatusEvent,
@@ -74,6 +76,7 @@ from pravi.db.models import (
 from pravi.db.session import session_scope
 from pravi.domains.registry import DomainRegistry
 from pravi.events import KIND_RUN_FINISHED, listen_events
+from pravi.personas import ALL_PERSONAS, KNOWN_STACKS
 from pravi.services import agent_draft as draft_service
 from pravi.services import clarification as clarification_service
 from pravi.services import github as gh
@@ -161,6 +164,8 @@ def _ticket_to_out(
         pr_number=ticket.pr_number,
         pr_url=pr_url,
         github_issue_url=ticket.github_issue_url,
+        persona=ticket.persona,
+        stack=ticket.stack,
     )
 
 
@@ -350,24 +355,35 @@ def _domains_at(repo_root: Path, domains_file: str | None) -> list[DomainOut]:
     ]
 
 
-@router.get("/repos", response_model=list[RepoOut])
-async def list_repos() -> list[RepoOut]:
-    """List repos pravi has seen — useful for the create-ticket dropdown.
+@router.get("/personas", response_model=list[PersonaOut])
+async def list_personas() -> list[PersonaOut]:
+    """The full persona catalog (active + coming_soon) — drives the
+    PersonaPicker. UI greys out coming_soon entries. See ADR 0004."""
+    return [
+        PersonaOut(
+            slug=p.slug,
+            name=p.name,
+            group=str(p.group),
+            status=str(p.status),
+            description=p.description,
+            baseline_skills=list(p.baseline_skills),
+        )
+        for p in ALL_PERSONAS
+    ]
 
-    Includes both repos with existing tickets AND repos configured via
-    PRAVI_TARGET_REPOS (so a fresh install has something to offer in the UI).
-    """
-    seen: dict[str, RepoOut] = {}
-    async with session_scope() as session:
-        rows = (await session.execute(select(Repo))).scalars().all()
-        for r in rows:
-            seen[r.local_path] = RepoOut(id=r.id, name=r.name, local_path=r.local_path)
 
-    for path in get_settings().target_repos:
-        resolved = str(path.expanduser().resolve())
-        if resolved not in seen and Path(resolved).is_dir():
-            seen[resolved] = RepoOut(id=-1, name=Path(resolved).name, local_path=resolved)
-    return list(seen.values())
+@router.get("/stacks", response_model=list[StackOut])
+async def list_stacks() -> list[StackOut]:
+    """Known stack slugs. Open-set — the decompose architect can mint
+    new ones; unknown slugs resolve to `unknown` at the dev-prompt step."""
+    return [
+        StackOut(
+            slug=s.slug,
+            name=s.name,
+            additional_skills=list(s.additional_skills),
+        )
+        for s in KNOWN_STACKS
+    ]
 
 
 @router.get("/repos/_/domains", response_model=list[DomainOut])
@@ -583,6 +599,20 @@ async def create_ticket(req: CreateTicketRequest) -> CreateTicketResult:
                 or f"https://github.com/{gi.owner}/{gi.name}/issues/{gi.number}"
             )
 
+        # Persona + stack: explicit request value wins; otherwise inherit
+        # from the parent (so all children of a "backend"-tagged feature
+        # default to backend). Null at both → catalog defaults at runtime.
+        resolved_persona = (
+            req.persona
+            if req.persona is not None
+            else (parent_row.persona if parent_row is not None else None)
+        )
+        resolved_stack = (
+            req.stack
+            if req.stack is not None
+            else (parent_row.stack if parent_row is not None else None)
+        )
+
         if existing_ticket is None:
             ticket = Ticket(
                 repo_id=existing_repo.id,
@@ -595,6 +625,8 @@ async def create_ticket(req: CreateTicketRequest) -> CreateTicketResult:
                 parent_id=parent_row.id if parent_row else None,
                 cost_ceiling_usd=req.cost_ceiling_usd,
                 github_issue_url=github_issue_url,
+                persona=resolved_persona,
+                stack=resolved_stack,
             )
             session.add(ticket)
             await session.flush()
@@ -609,6 +641,11 @@ async def create_ticket(req: CreateTicketRequest) -> CreateTicketResult:
             existing_ticket.cost_ceiling_usd = req.cost_ceiling_usd
             if github_issue_url and not existing_ticket.github_issue_url:
                 existing_ticket.github_issue_url = github_issue_url
+            # Persona/stack: only overwrite when explicitly provided.
+            if req.persona is not None:
+                existing_ticket.persona = req.persona
+            if req.stack is not None:
+                existing_ticket.stack = req.stack
             ticket_id = existing_ticket.id
 
     settings = get_settings()
@@ -1196,6 +1233,8 @@ async def decompose_approve(
                 status=TicketStatus.pending,
                 kind=TicketKind.feature,
                 parent_id=ticket.id,
+                persona=f.persona,
+                stack=f.stack,
             )
             session.add(f_row)
             await session.flush()
@@ -1213,6 +1252,9 @@ async def decompose_approve(
                     status=TicketStatus.pending,
                     kind=TicketKind.task,
                     parent_id=f_row.id,
+                    # Tasks inherit from feature when not explicitly set.
+                    persona=t.persona or f.persona,
+                    stack=t.stack or f.stack,
                 )
                 session.add(t_row)
                 await session.flush()

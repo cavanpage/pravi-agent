@@ -3,6 +3,7 @@ import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { useMutation, useQuery } from "@tanstack/react-query";
 
 import { api, GitHubRepoRef, GitHubRepoResult, TicketKind } from "../lib/api";
+import { PersonaPicker } from "../components/PersonaPicker";
 
 // Kind-specific guidance so the form makes sense for epics + features too.
 const KIND_LABELS: Record<TicketKind, string> = {
@@ -36,16 +37,29 @@ export function NewTicketPage() {
   const [externalId, setExternalId] = useState("");
   const [title, setTitle] = useState("");
   const [body, setBody] = useState("");
-  const [repoPath, setRepoPath] = useState("");
   // When the user picks a repo from the GitHub search, we stash the
-  // coordinates here. The server clones lazily at create time so the path
-  // doesn't have to exist locally yet — repoPath stays empty until then.
+  // coordinates here. The sandbox provisions a working dir lazily on the
+  // first dev run (see ADR 0003).
   const [githubRepo, setGithubRepo] = useState<GitHubRepoResult | null>(null);
   const [domainName, setDomainName] = useState("");
   const [baseRef, setBaseRef] = useState("main");
+  // Persona + stack (ADR 0004). null = unassigned / generic.
+  const [persona, setPersona] = useState<string | null>(null);
+  const [stack, setStack] = useState<string | null>(null);
   // Optional cumulative spend cap. Empty = inherit from parent / env default.
   const [ceilingUsd, setCeilingUsd] = useState("");
   const [error, setError] = useState<string | null>(null);
+
+  const personasQ = useQuery({
+    queryKey: ["personas"],
+    queryFn: () => api.listPersonas(),
+    staleTime: 5 * 60_000,
+  });
+  const stacksQ = useQuery({
+    queryKey: ["stacks"],
+    queryFn: () => api.listStacks(),
+    staleTime: 5 * 60_000,
+  });
 
   // Load the parent if there is one — for inheritance + display.
   const parentQ = useQuery({
@@ -73,20 +87,16 @@ export function NewTicketPage() {
     return explicitKind || "task";
   }, [parentQ.data, explicitKind]);
 
-  // Once parent loads, lock + seed repo/domain.
+  // Once parent loads, seed the inherited domain. The repo identity is
+  // implied by `parent_external_id` (server inherits) — no client-side
+  // path threading needed under ADR 0003's sandbox seam.
   const inheritedFromParent = !!parentQ.data;
   useEffect(() => {
-    if (parentQ.data) {
-      setRepoPath(parentQ.data.repo.local_path);
-      if (parentQ.data.domain_name) setDomainName(parentQ.data.domain_name);
-    }
+    if (parentQ.data?.domain_name) setDomainName(parentQ.data.domain_name);
+    // Inherit persona + stack so children default to "same kind of work".
+    if (parentQ.data?.persona) setPersona(parentQ.data.persona);
+    if (parentQ.data?.stack) setStack(parentQ.data.stack);
   }, [parentQ.data]);
-
-  const reposQ = useQuery({
-    queryKey: ["repos"],
-    queryFn: () => api.listRepos(),
-    enabled: !inheritedFromParent,
-  });
 
   // Whether the user has connected GitHub — drives the search picker.
   const ghMeQ = useQuery({
@@ -120,18 +130,17 @@ export function NewTicketPage() {
     }
   }, [githubRepo, baseRef]);
 
-  useEffect(() => {
-    if (!inheritedFromParent && !repoPath && reposQ.data && reposQ.data.length > 0) {
-      setRepoPath(reposQ.data[0].local_path);
-    }
-  }, [reposQ.data, repoPath, inheritedFromParent]);
-
-  // Domains for the chosen repo. Always shown, even with inherited repo, so
-  // users can override (e.g. feature in a different domain than the epic).
+  // Domains for the chosen repo. We can only read these from disk, so:
+  //   - Inherited tickets: use the parent's resolved local path (cloned
+  //     by an earlier sandbox provision or eager create-time clone).
+  //   - Brand-new GitHub-picked tickets: skip the picker. Server defaults
+  //     to the first domain in `domains.yaml`. A future endpoint could
+  //     fetch the file via the GitHub Contents API to populate this.
+  const domainsLookupPath = parentQ.data?.repo.local_path || "";
   const domainsQ = useQuery({
-    queryKey: ["domains", repoPath],
-    queryFn: () => api.listDomainsForPath(repoPath),
-    enabled: !!repoPath,
+    queryKey: ["domains", domainsLookupPath],
+    queryFn: () => api.listDomainsForPath(domainsLookupPath),
+    enabled: !!domainsLookupPath,
     retry: 0,
   });
 
@@ -183,7 +192,10 @@ export function NewTicketPage() {
         body,
         // Send a local repo_path OR a github_repo coordinate. If a parent
         // is set, both are ignored and the server inherits from parent.
-        repo_path: githubRepoRef ? undefined : repoPath || undefined,
+        // Repo identity comes from `parent_external_id` (inherits) or
+        // `github_repo` (lazy clone). Local-path entry was removed by
+        // ADR 0003 — the server resolves the working dir at run time.
+        repo_path: undefined,
         github_repo: githubRepoRef,
         // Epics CAN have no domain; for features + tasks, send what's chosen.
         domain_name: kind === "epic" && !domainName ? undefined : domainName || undefined,
@@ -191,6 +203,10 @@ export function NewTicketPage() {
         kind,
         parent_external_id: parentId,
         cost_ceiling_usd: ceilingParsed,
+        // ADR 0004 — agent framing. Null on either falls back to
+        // parent inherit (server-side), then catalog defaults.
+        persona,
+        stack,
       }),
     onSuccess: (res) => {
       setError(null);
@@ -200,14 +216,13 @@ export function NewTicketPage() {
   });
 
   const needsDomain = kind !== "epic";
-  // Domains can only be loaded from a *local* checkout, so they're only
-  // required when we already have one. Picking from GitHub defers the
-  // domain choice (epic is fine with none; for feature/task the user
-  // needs to clone or seed domains.yaml separately — out of scope here).
-  const canSelectDomain = !!repoPath && !githubRepo;
+  // Domain can only be picked when we have a local checkout to read
+  // `domains.yaml` from — i.e. inherited from parent. For fresh GH-picked
+  // tickets the server falls back to the first domain.
+  const canSelectDomain = !!domainsLookupPath;
   const canSubmit =
     !!title.trim() &&
-    (!!repoPath || !!githubRepo || inheritedFromParent) &&
+    (!!githubRepo || inheritedFromParent) &&
     (!needsDomain || !canSelectDomain || !!domainName) &&
     !ceilingInvalid &&
     !createMut.isPending;
@@ -304,60 +319,39 @@ export function NewTicketPage() {
             inheritedFromParent
               ? "Inherited from parent."
               : githubRepo
-                ? "Picked from GitHub. The server clones it on create if not already cached."
+                ? "Picked from GitHub. The sandbox lazily clones it on first dev run (see ADR 0003)."
                 : githubConnected
-                  ? "Search your GitHub repos, or paste a local path below."
-                  : "Connect GitHub on the home page to search your repos, or paste a local path."
+                  ? "Search your GitHub repos. Pravi identifies repos by their GitHub coordinates — the local clone is a sandbox detail."
+                  : "Connect GitHub from the home page header to pick a repo."
           }
         >
-          {githubRepo ? (
+          {inheritedFromParent && parentQ.data ? (
+            <div className="rounded-xl border border-white/10 bg-white/[0.02] px-3.5 py-2.5 text-sm text-neutral-300">
+              {parentQ.data.repo.github_owner && parentQ.data.repo.github_name
+                ? `${parentQ.data.repo.github_owner}/${parentQ.data.repo.github_name}`
+                : parentQ.data.repo.name}
+            </div>
+          ) : githubRepo ? (
             <SelectedGithubRepo
               repo={githubRepo}
               onClear={() => setGhSearch("")}
               onReplace={() => setGithubRepo(null)}
             />
-          ) : !inheritedFromParent && githubConnected ? (
+          ) : githubConnected ? (
             <GitHubRepoPicker
               query={ghSearch}
               onQueryChange={setGhSearch}
               repos={ghReposQ.data ?? []}
               isLoading={ghReposQ.isFetching}
               error={(ghReposQ.error as Error | null)?.message ?? null}
-              onPick={(r) => {
-                setGithubRepo(r);
-                setRepoPath("");
-              }}
+              onPick={(r) => setGithubRepo(r)}
             />
-          ) : null}
-
-          {!inheritedFromParent && !githubRepo && reposQ.data && reposQ.data.length > 0 ? (
-            <select
-              value={repoPath}
-              onChange={(e) => setRepoPath(e.target.value)}
-              className={`${inputClasses} ${githubConnected ? "mt-3" : ""}`}
-            >
-              <option value="">
-                {githubConnected
-                  ? "— or pick from local repos —"
-                  : "— pick a local repo —"}
-              </option>
-              {reposQ.data.map((r) => (
-                <option key={r.local_path} value={r.local_path}>
-                  {r.name} ({r.local_path})
-                </option>
-              ))}
-            </select>
-          ) : null}
-          {!githubRepo ? (
-            <input
-              type="text"
-              value={repoPath}
-              onChange={(e) => setRepoPath(e.target.value)}
-              placeholder="/absolute/path/to/repo"
-              disabled={inheritedFromParent}
-              className={`${inputClasses} mt-2 font-mono text-sm`}
-            />
-          ) : null}
+          ) : (
+            <div className="rounded-xl border border-amber-400/20 bg-amber-400/[0.04] px-3.5 py-2.5 text-sm text-amber-200">
+              Connect GitHub first — pravi identifies repos by their GitHub
+              coordinates.
+            </div>
+          )}
         </Field>
 
         {needsDomain ? (
@@ -368,26 +362,68 @@ export function NewTicketPage() {
                 ? `loading domains failed: ${(domainsQ.error as Error).message}`
                 : inheritedFromParent
                   ? "Default inherited from parent — override if this child belongs to a different domain."
-                  : "Pick which slice of the repo the dev agent is scoped to."
+                  : "The server uses the first domain in `domains.yaml` after the sandbox provisions. You can change it later."
             }
           >
-            <select
-              value={domainName}
-              onChange={(e) => setDomainName(e.target.value)}
-              disabled={!domainsQ.data}
-              className={inputClasses}
-            >
-              {!domainsQ.data ? (
-                <option value="">{repoPath ? "loading…" : "select a repo first"}</option>
-              ) : null}
-              {domainsQ.data?.map((d) => (
-                <option key={d.name} value={d.name}>
-                  {d.name} {d.description ? `— ${d.description}` : ""}
-                </option>
-              ))}
-            </select>
+            {canSelectDomain ? (
+              <select
+                value={domainName}
+                onChange={(e) => setDomainName(e.target.value)}
+                disabled={!domainsQ.data}
+                className={inputClasses}
+              >
+                {!domainsQ.data ? (
+                  <option value="">loading…</option>
+                ) : null}
+                {domainsQ.data?.map((d) => (
+                  <option key={d.name} value={d.name}>
+                    {d.name} {d.description ? `— ${d.description}` : ""}
+                  </option>
+                ))}
+              </select>
+            ) : (
+              <div className="rounded-xl border border-white/10 bg-white/[0.02] px-3.5 py-2.5 text-sm text-neutral-400 italic">
+                Auto-selected at first dev run (no local checkout yet).
+              </div>
+            )}
           </Field>
         ) : null}
+
+        <Field
+          label="Persona"
+          hint={
+            inheritedFromParent
+              ? "Defaults to the parent's persona; override only if this child does a different kind of work."
+              : "Optional — shapes the dev agent's framing. The 6 active personas are pickable; coming-soon ones are disabled. See ADR 0004."
+          }
+        >
+          <PersonaPicker
+            value={persona}
+            onChange={setPersona}
+            personas={personasQ.data ?? null}
+          />
+        </Field>
+
+        <Field
+          label="Stack"
+          hint="What tech this ticket is in (e.g. python-fastapi, typescript-react). Determines which Claude Skills get hinted. Leave unassigned for generic."
+        >
+          <select
+            value={stack ?? ""}
+            onChange={(e) => setStack(e.target.value || null)}
+            className={inputClasses}
+            disabled={!stacksQ.data}
+          >
+            <option value="">— unassigned (generic) —</option>
+            {stacksQ.data?.map((s) =>
+              s.slug === "unknown" ? null : (
+                <option key={s.slug} value={s.slug}>
+                  {s.name}
+                </option>
+              ),
+            )}
+          </select>
+        </Field>
 
         {kind === "task" ? (
           <Field label="Base branch">

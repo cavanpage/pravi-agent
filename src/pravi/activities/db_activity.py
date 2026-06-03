@@ -38,7 +38,11 @@ class TicketRef:
 
     ticket_id: int
     repo_id: int
-    repo_local_path: str
+    # Optional now (ADR 0003): for the sandbox seam, the workflow passes
+    # `repo_id` to `provision_sandbox` and lets the sandbox resolve where
+    # the work happens. Kept on the snapshot for diagnostics + legacy
+    # CLI paths that still consume a path directly.
+    repo_local_path: str | None
     repo_name: str
     external_id: str
     title: str
@@ -48,6 +52,10 @@ class TicketRef:
     parent_id: int | None = None
     ancestors: list[AncestorRef] = field(default_factory=list)
     ancestral_body_md: str = ""
+    # Persona + stack — see ADR 0004. Both nullable; the dev agent's
+    # prompt builder falls back to generic on null.
+    persona: str | None = None
+    stack: str | None = None
 
 
 @dataclass
@@ -139,6 +147,8 @@ async def load_ticket(ticket_id: int) -> TicketRef:
             parent_id=ticket.parent_id,
             ancestors=ancestors,
             ancestral_body_md=merged,
+            persona=ticket.persona,
+            stack=ticket.stack,
         )
 
 

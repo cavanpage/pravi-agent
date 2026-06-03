@@ -52,6 +52,10 @@ class CreateTicketRequest(BaseModel):
     parent_external_id: str | None = None
     # Optional cumulative spend cap (USD). Null inherits from ancestor / env.
     cost_ceiling_usd: float | None = None
+    # ADR 0004 — agent framing. Null on each falls back to defaults
+    # (`other` / `unknown`). Inherited from parent if not set explicitly.
+    persona: str | None = None
+    stack: str | None = None
 
 
 class CreateTicketResult(BaseModel):
@@ -83,6 +87,10 @@ class TicketOut(BaseModel):
     pr_url: str | None = None
     # Source GitHub issue (if imported via the /issues page).
     github_issue_url: str | None = None
+    # Persona + stack — see ADR 0004. Null persona = `other` (generic);
+    # null stack = `unknown` (no extra skill hint).
+    persona: str | None = None
+    stack: str | None = None
     # Per-ticket cumulative spend cap (USD). Null = inherit from parent /
     # env default / unlimited. See /tickets/{id}/cost-rollup for the
     # effective value after walking the chain.
@@ -251,6 +259,8 @@ class DecomposedTaskOut(BaseModel):
     title: str
     description: str = ""
     # NOTE: feature-level depends_on lives on DecomposedFeatureOut below.
+    persona: str | None = None
+    stack: str | None = None
 
 
 class DecomposedFeatureOut(BaseModel):
@@ -259,6 +269,8 @@ class DecomposedFeatureOut(BaseModel):
     domain: str | None = None
     tasks: list[DecomposedTaskOut]
     depends_on: list[str] = []  # sibling feature titles
+    persona: str | None = None
+    stack: str | None = None
 
 
 class RoadmapFeatureOut(BaseModel):
@@ -290,6 +302,23 @@ class RoadmapOut(BaseModel):
     # Features that couldn't be placed (involved in a cycle). Should normally
     # be empty — surface them so the UI can flag the problem.
     cyclic_external_ids: list[str] = []
+
+
+class PersonaOut(BaseModel):
+    """Catalog entry for the /api/personas endpoint — drives the picker."""
+
+    slug: str
+    name: str
+    group: str
+    status: str  # "active" | "coming_soon"
+    description: str
+    baseline_skills: list[str] = []
+
+
+class StackOut(BaseModel):
+    slug: str
+    name: str
+    additional_skills: list[str] = []
 
 
 class GitHubConnectionOut(BaseModel):

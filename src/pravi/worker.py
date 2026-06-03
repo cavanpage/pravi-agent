@@ -12,6 +12,7 @@ from pravi.activities.db_activity import load_plan, load_ticket, update_ticket_s
 from pravi.activities.dev_activity import run_dev
 from pravi.activities.git_activity import create_worktree, remove_worktree, run_command
 from pravi.activities.pr_activity import push_and_open_pr
+from pravi.activities.sandbox_activity import cleanup_sandbox, provision_sandbox
 from pravi.config import apply_anthropic_auth, get_settings
 from pravi.logging_setup import configure_logging
 from pravi.workflows.dev_workflow import DevWorkflow
@@ -39,9 +40,14 @@ def _resolve_queue(queue: Queue) -> tuple[str, list, list]:
             s.temporal_task_queue_features,
             workflows,
             [
+                # Legacy git-path activities — still used by smoke/dev CLI flows
+                # that bypass the Repo identity and take a raw `--repo` path.
                 create_worktree,
                 remove_worktree,
                 run_command,
+                # Sandbox-backed activities for FeatureWorkflow (see ADR 0003).
+                provision_sandbox,
+                cleanup_sandbox,
                 load_ticket,
                 load_plan,
                 update_ticket_status,

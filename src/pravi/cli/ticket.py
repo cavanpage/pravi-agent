@@ -44,7 +44,7 @@ def run_ticket(
     ] = None,
     repo: Annotated[
         Path | None,
-        typer.Option(help="Target repo path. Defaults to first PRAVI_TARGET_REPOS entry."),
+        typer.Option(help="Target repo path (must be a git checkout)."),
     ] = None,
     domain: Annotated[
         str | None,
@@ -77,11 +77,7 @@ def run_ticket(
     configure_logging(settings.log_level)
 
     if repo is None:
-        if not settings.target_repos:
-            raise typer.BadParameter(
-                "no --repo provided and PRAVI_TARGET_REPOS is empty",
-            )
-        repo = settings.target_repos[0]
+        raise typer.BadParameter("--repo is required")
     repo = repo.expanduser().resolve()
 
     registry = DomainRegistry.load(repo, override_file=domains_file)
@@ -164,7 +160,7 @@ async def _run_workflow(
 def list_domains(
     repo: Annotated[
         Path | None,
-        typer.Option(help="Target repo path. Defaults to first PRAVI_TARGET_REPOS entry."),
+        typer.Option(help="Target repo path (must be a git checkout)."),
     ] = None,
     domains_file: Annotated[
         Path | None,
@@ -172,13 +168,6 @@ def list_domains(
     ] = None,
 ) -> None:
     """List domains declared in a target repo's `.builder/domains.yaml`."""
-    settings = get_settings()
-    if repo is None:
-        if not settings.target_repos:
-            raise typer.BadParameter(
-                "no --repo provided and PRAVI_TARGET_REPOS is empty",
-            )
-        repo = settings.target_repos[0]
     registry = DomainRegistry.load(repo.expanduser().resolve(), override_file=domains_file)
     for d in registry.domains:
         console.print(f"[bold]{d.name}[/]  paths={d.paths}  test={d.test!r}")
