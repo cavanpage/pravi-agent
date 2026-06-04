@@ -9,7 +9,10 @@ import { DecomposePanel } from "../components/DecomposePanel";
 import { DependencyEditor } from "../components/DependencyEditor";
 import { LiveRunPanel } from "../components/LiveRunPanel";
 import { PlanEditor } from "../components/PlanEditor";
+import { ChildStatusChips } from "../components/ChildStatusChips";
 import { RoadmapView } from "../components/RoadmapView";
+import { StartChildrenButton } from "../components/StartChildrenButton";
+import { SubtreeActivityPanel } from "../components/SubtreeActivityPanel";
 import { StatusBadge } from "../components/StatusBadge";
 import { TicketInfoCard } from "../components/TicketInfoCard";
 import {
@@ -248,9 +251,10 @@ export function TicketPlanPage() {
               ) : null}
             </>
           ) : (
-            <span className="text-[11px] text-neutral-500 uppercase tracking-[0.14em]">
-              container
-            </span>
+            <>
+              <StatusBadge status={ticket.status} />
+              <ChildStatusChips ticket={ticket} size="lg" />
+            </>
           )}
           <button
             onClick={confirmDelete}
@@ -284,18 +288,29 @@ export function TicketPlanPage() {
       {/* Epic: roadmap (waves) replaces the flat children list. */}
       {ticket.kind === "epic" ? (
         <section className="flex flex-col gap-3">
-          <div className="flex items-center justify-between">
+          <div className="flex items-center justify-between flex-wrap gap-2">
             <h2 className="text-[11px] uppercase tracking-[0.14em] font-semibold text-neutral-500">
               roadmap
             </h2>
-            <Link
-              to={`/new?parent=${encodeURIComponent(ticket.external_id)}`}
-              className="px-3 py-1.5 rounded-full bg-blue-500 hover:bg-blue-400 text-white text-xs font-medium shadow-lg shadow-blue-500/25 transition"
-            >
-              + new feature
-            </Link>
+            <div className="flex items-center gap-2">
+              <StartChildrenButton
+                externalId={ticket.external_id}
+                parentKind="epic"
+                pendingCount={ticket.child_status_counts?.pending ?? undefined}
+              />
+              <Link
+                to={`/new?parent=${encodeURIComponent(ticket.external_id)}`}
+                className="px-3 py-1.5 rounded-full bg-blue-500 hover:bg-blue-400 text-white text-xs font-medium shadow-lg shadow-blue-500/25 transition"
+              >
+                + new feature
+              </Link>
+            </div>
           </div>
           <RoadmapView epicExternalId={externalId} />
+          <SubtreeActivityPanel
+            externalId={ticket.external_id}
+            parentKind="epic"
+          />
         </section>
       ) : null}
 
@@ -303,10 +318,21 @@ export function TicketPlanPage() {
       {ticket.kind === "feature" ? (
         <>
           <DependencyEditor feature={ticket} />
+          <div className="flex items-center justify-end">
+            <StartChildrenButton
+              externalId={ticket.external_id}
+              parentKind="feature"
+              pendingCount={ticket.child_status_counts?.pending ?? undefined}
+            />
+          </div>
           <ContainerView
             ticket={ticket}
             children={childrenQ.data ?? []}
             allowedChildKind={allowedChildKind}
+          />
+          <SubtreeActivityPanel
+            externalId={ticket.external_id}
+            parentKind="feature"
           />
         </>
       ) : null}

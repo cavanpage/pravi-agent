@@ -23,10 +23,12 @@ from temporalio.common import RetryPolicy
 with workflow.unsafe.imports_passed_through():
     from pravi.activities.db_activity import (
         PlanData,
+        SynthesizePlanRequest,
         TicketRef,
         TicketStatusUpdate,
         load_plan,
         load_ticket,
+        synthesize_plan_from_body,
         update_ticket_status,
     )
     from pravi.activities.dev_activity import (
@@ -65,6 +67,13 @@ class FeatureWorkflowInput:
     base_ref: str
     llm_task_queue: str
     cleanup_worktree: bool = False
+    # When True, skip the wait-for-plan signal and synthesize a Plan row
+    # from the ticket body instead. Used by the "start all nested" flow
+    # at feature/epic level — decomposed tasks already carry their per-
+    # task description (the architect's output at decompose time), so re-
+    # running the architect at task level is duplicate work. Review
+    # happens at PR time instead of plan-approve time.
+    skip_plan: bool = False
 
 
 @dataclass
@@ -124,36 +133,52 @@ class FeatureWorkflow:
             retry_policy=RetryPolicy(maximum_attempts=3),
         )
 
-        # Block until the architect sends approve_plan(plan_id) — or cancel.
-        self._status = STATUS_WAITING_FOR_PLAN
-        await workflow.wait_condition(
-            lambda: self._plan_id is not None or self._cancel_requested
-        )
-
-        if self._cancel_requested:
-            self._status = STATUS_CANCELLED
-            await workflow.execute_activity(
-                update_ticket_status,
-                TicketStatusUpdate(ticket_id=ticket.ticket_id, status="cancelled"),
+        plan: PlanData
+        if inp.skip_plan:
+            # Auto-synthesize a Plan from the ticket body. No architect
+            # call, no human plan-approve gate — review happens at PR time.
+            self._status = STATUS_WAITING_FOR_PLAN  # transient; reused for UI
+            plan = await workflow.execute_activity(
+                synthesize_plan_from_body,
+                SynthesizePlanRequest(
+                    ticket_id=ticket.ticket_id,
+                    domain_name=inp.domain_name,
+                ),
                 start_to_close_timeout=timedelta(seconds=30),
                 retry_policy=RetryPolicy(maximum_attempts=3),
             )
-            return FeatureWorkflowResult(
-                ticket_id=ticket.ticket_id,
-                plan_id=None,
-                sandbox_id=None,
-                branch=None,
-                dev=None,
-                pr=None,
-                summary="cancelled before plan",
+            self._plan_id = plan.plan_id
+        else:
+            # Block until the architect sends approve_plan(plan_id) — or cancel.
+            self._status = STATUS_WAITING_FOR_PLAN
+            await workflow.wait_condition(
+                lambda: self._plan_id is not None or self._cancel_requested
             )
 
-        plan: PlanData = await workflow.execute_activity(
-            load_plan,
-            self._plan_id,
-            start_to_close_timeout=timedelta(seconds=30),
-            retry_policy=RetryPolicy(maximum_attempts=3),
-        )
+            if self._cancel_requested:
+                self._status = STATUS_CANCELLED
+                await workflow.execute_activity(
+                    update_ticket_status,
+                    TicketStatusUpdate(ticket_id=ticket.ticket_id, status="cancelled"),
+                    start_to_close_timeout=timedelta(seconds=30),
+                    retry_policy=RetryPolicy(maximum_attempts=3),
+                )
+                return FeatureWorkflowResult(
+                    ticket_id=ticket.ticket_id,
+                    plan_id=None,
+                    sandbox_id=None,
+                    branch=None,
+                    dev=None,
+                    pr=None,
+                    summary="cancelled before plan",
+                )
+
+            plan = await workflow.execute_activity(
+                load_plan,
+                self._plan_id,
+                start_to_close_timeout=timedelta(seconds=30),
+                retry_policy=RetryPolicy(maximum_attempts=3),
+            )
 
         await workflow.execute_activity(
             update_ticket_status,

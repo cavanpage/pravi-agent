@@ -4,6 +4,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { api, Persona, Ticket, TicketKind } from "../lib/api";
 import { SortKey, useHomeViewState } from "../lib/useHomeViewState";
+import { ChildStatusChips } from "../components/ChildStatusChips";
 import { GitHubConnectButton } from "../components/GitHubConnectButton";
 import { PersonaChip } from "../components/PersonaChip";
 import { PersonaSpendCard } from "../components/PersonaSpendCard";
@@ -682,8 +683,13 @@ function TicketRow({
               ? ` · ${ticket.child_count} child${ticket.child_count === 1 ? "" : "ren"}`
               : ""}
           </div>
+          {ticket.kind !== "task" ? (
+            <div className="mt-1">
+              <ChildStatusChips ticket={ticket} />
+            </div>
+          ) : null}
         </div>
-        {ticket.kind === "task" ? <StatusBadge status={ticket.status} /> : null}
+        <StatusBadge status={ticket.status} />
       </Link>
     </li>
   );

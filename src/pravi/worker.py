@@ -8,7 +8,12 @@ import structlog
 from temporalio.client import Client
 from temporalio.worker import Worker
 
-from pravi.activities.db_activity import load_plan, load_ticket, update_ticket_status
+from pravi.activities.db_activity import (
+    load_plan,
+    load_ticket,
+    synthesize_plan_from_body,
+    update_ticket_status,
+)
 from pravi.activities.dev_activity import run_dev
 from pravi.activities.git_activity import create_worktree, remove_worktree, run_command
 from pravi.activities.pr_activity import push_and_open_pr
@@ -50,6 +55,7 @@ def _resolve_queue(queue: Queue) -> tuple[str, list, list]:
                 cleanup_sandbox,
                 load_ticket,
                 load_plan,
+                synthesize_plan_from_body,
                 update_ticket_status,
                 push_and_open_pr,
             ],

@@ -4,12 +4,14 @@ from __future__ import annotations
 import asyncio
 import os
 import uuid
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
 import structlog
 from fastapi import APIRouter, HTTPException
 from sqlalchemy import and_, func, select
+from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
 from sse_starlette.sse import EventSourceResponse
 from temporalio.common import (
@@ -55,12 +57,19 @@ from pravi.api.schemas import (
     RunOut,
     StackOut,
     StackSpendOut,
+    StartChildrenResult,
+    StartChildrenSkipped,
     TicketBudgetUpdate,
     TicketOut,
     WorkflowStatusEvent,
 )
 from pravi.api.temporal_client import get_temporal_client
-from pravi.budget import aggregate_by_persona, aggregate_by_stack, cost_rollup
+from pravi.budget import (
+    aggregate_by_persona,
+    aggregate_by_stack,
+    cost_rollup,
+    descendant_task_ids,
+)
 from pravi.config import get_settings
 from pravi.db.models import (
     AgentDraft,
@@ -77,7 +86,7 @@ from pravi.db.models import (
 )
 from pravi.db.session import session_scope
 from pravi.domains.registry import DomainRegistry
-from pravi.events import KIND_RUN_FINISHED, listen_events
+from pravi.events import KIND_RUN_FINISHED, listen_events, listen_events_many
 from pravi.personas import ALL_PERSONAS, KNOWN_STACKS
 from pravi.services import agent_draft as draft_service
 from pravi.services import clarification as clarification_service
@@ -119,6 +128,126 @@ async def _get_ticket_and_repo(external_id: str) -> tuple[Ticket, Repo]:
         return ticket, repo
 
 
+async def _child_task_status_counts(
+    session: AsyncSession,
+    parent_ids: list[int],
+) -> dict[int, dict[str, int]]:
+    """For each ticket id in `parent_ids`, return `{status_slug: count}`
+    for all descendant TASK tickets.
+
+    Hierarchy is at most three levels (epic → feature → task), so two
+    bulk queries cover both shapes:
+      * direct task children of features in the parent set
+      * tasks-via-features for epics in the parent set
+    Results are summed together so an epic id maps to *its* subtree's
+    counts. Task ids (no descendants) get an empty dict.
+    """
+    if not parent_ids:
+        return {}
+    out: dict[int, dict[str, int]] = {pid: {} for pid in parent_ids}
+
+    # Feature → task (direct children with kind=task whose parent is in the set).
+    feature_rows = (
+        await session.execute(
+            select(Ticket.parent_id, Ticket.status, func.count())
+            .where(Ticket.kind == TicketKind.task.value)
+            .where(Ticket.parent_id.in_(parent_ids))
+            .group_by(Ticket.parent_id, Ticket.status)
+        )
+    ).all()
+    for parent_id, status, n in feature_rows:
+        if parent_id is None:
+            continue
+        bucket = out.setdefault(parent_id, {})
+        bucket[str(status)] = bucket.get(str(status), 0) + int(n)
+
+    # Epic → task (tasks under features whose parent is in the set).
+    FeatureT = aliased(Ticket)
+    epic_rows = (
+        await session.execute(
+            select(FeatureT.parent_id, Ticket.status, func.count())
+            .join(FeatureT, Ticket.parent_id == FeatureT.id)
+            .where(Ticket.kind == TicketKind.task.value)
+            .where(FeatureT.kind == TicketKind.feature.value)
+            .where(FeatureT.parent_id.in_(parent_ids))
+            .group_by(FeatureT.parent_id, Ticket.status)
+        )
+    ).all()
+    for epic_id, status, n in epic_rows:
+        if epic_id is None:
+            continue
+        bucket = out.setdefault(epic_id, {})
+        bucket[str(status)] = bucket.get(str(status), 0) + int(n)
+
+    return out
+
+
+# Status sets used by the parent-status derivation. Kept here as
+# module-level constants so the derivation logic is unit-testable
+# without hitting the DB.
+_DEV_ACTIVE = ("planning", "plan_approved", "in_progress")
+_DEV_DONE = ("pr_open", "merged")
+
+
+def _derive_parent_status(counts: dict[str, int]) -> str | None:
+    """Derive a single-word status for a feature/epic from its descendant
+    task status breakdown. Returns None when there's no subtree to roll
+    up (caller falls back to the row's raw `status`).
+
+    Precedence (top wins):
+      1. ANY task in an active dev state (planning / plan_approved /
+         in_progress) → "in_progress" — work is happening; don't hide
+         the parent.
+      2. ANY task pending alongside any done/failed task → "in_progress"
+         — there's more work scheduled.
+      3. ANY task failed (with no active or pending work) → "failed" —
+         terminal state, surfaced for attention.
+      4. All pending → "pending".
+      5. All cancelled → "cancelled".
+      6. All merged → "merged".
+      7. Any pr_open (with rest done) → "pr_open".
+
+    The chips breakdown in the UI surfaces failures explicitly even when
+    the derived status is "in_progress", so a parent with 1 failed task
+    + 5 still running is correctly shown as in-progress (still visible
+    in the home dashboard's In-flight section) with a "1 failed" chip
+    next to the run / PR-open counts.
+    """
+    total = sum(counts.values())
+    if total == 0:
+        return None
+
+    # Active work beats everything else — we never want a partially-failed
+    # parent to vanish into the Closed section while tasks are still
+    # running.
+    if any(counts.get(s, 0) > 0 for s in _DEV_ACTIVE):
+        return "in_progress"
+
+    pending = counts.get("pending", 0)
+    failed = counts.get("failed", 0)
+    pr_open = counts.get("pr_open", 0)
+    merged = counts.get("merged", 0)
+    cancelled = counts.get("cancelled", 0)
+
+    # Pending + any non-pending state → work has started but more is
+    # queued. Treat as in-progress.
+    if pending > 0 and pending < total:
+        return "in_progress"
+
+    # Past here nothing is active or pending — the subtree is settled.
+    if failed > 0:
+        return "failed"
+    if pending == total:
+        return "pending"
+    if cancelled == total:
+        return "cancelled"
+    if merged == total:
+        return "merged"
+    if pr_open > 0:
+        return "pr_open"
+    return None
+
+
 async def _parent_external_id(session, parent_id: int | None) -> str | None:
     if parent_id is None:
         return None
@@ -135,6 +264,7 @@ def _ticket_to_out(
     *,
     parent_external_id: str | None = None,
     child_count: int = 0,
+    child_status_counts: dict[str, int] | None = None,
 ) -> TicketOut:
     pr_url: str | None = None
     if ticket.pr_number and repo.github_owner and repo.github_name:
@@ -142,13 +272,25 @@ def _ticket_to_out(
             f"https://github.com/{repo.github_owner}/{repo.github_name}"
             f"/pull/{ticket.pr_number}"
         )
+
+    # For non-task tickets, replace the (mostly-inert) raw `status` with
+    # one derived from the subtree's task statuses. This way features +
+    # epics actually show "in_progress" / "failed" / "pr_open" as agents
+    # work, instead of staying at "pending" forever.
+    counts = child_status_counts or {}
+    out_status = str(ticket.status)
+    if str(ticket.kind) != TicketKind.task.value and counts:
+        derived = _derive_parent_status(counts)
+        if derived is not None:
+            out_status = derived
+
     return TicketOut(
         id=ticket.id,
         external_id=ticket.external_id,
         title=ticket.title,
         body=ticket.body or "",
         domain_name=ticket.domain_name,
-        status=str(ticket.status),
+        status=out_status,
         workflow_id=ticket.workflow_id,
         repo=RepoOut(
             id=repo.id,
@@ -168,6 +310,7 @@ def _ticket_to_out(
         github_issue_url=ticket.github_issue_url,
         persona=ticket.persona,
         stack=ticket.stack,
+        child_status_counts=counts,
     )
 
 
@@ -208,9 +351,23 @@ async def list_tickets(
             stmt = stmt.where(ParentT.external_id == parent_external_id)
         stmt = stmt.order_by(Ticket.updated_at.desc()).limit(limit)
         rows = (await session.execute(stmt)).all()
+
+        # Bulk-fetch descendant task status counts for every non-task row
+        # in the result set in ONE pair of queries (see helper). This is
+        # what lets features/epics show a derived status without a N+1.
+        non_task_ids = [
+            t.id for (t, _r, _p, _c) in rows
+            if str(t.kind) != TicketKind.task.value
+        ]
+        counts_by_id = await _child_task_status_counts(session, non_task_ids)
+
         return [
             _ticket_to_out(
-                t, r, parent_external_id=pext, child_count=int(cc or 0)
+                t,
+                r,
+                parent_external_id=pext,
+                child_count=int(cc or 0),
+                child_status_counts=counts_by_id.get(t.id),
             )
             for t, r, pext, cc in rows
         ]
@@ -226,7 +383,18 @@ async def get_ticket(external_id: str) -> TicketOut:
                 select(func.count(Ticket.id)).where(Ticket.parent_id == ticket.id)
             )
         ).scalar_one()
-    return _ticket_to_out(ticket, repo, parent_external_id=pext, child_count=int(cc))
+        counts_by_id = (
+            await _child_task_status_counts(session, [ticket.id])
+            if str(ticket.kind) != TicketKind.task.value
+            else {}
+        )
+    return _ticket_to_out(
+        ticket,
+        repo,
+        parent_external_id=pext,
+        child_count=int(cc),
+        child_status_counts=counts_by_id.get(ticket.id),
+    )
 
 
 @router.get("/tickets/{external_id}/children", response_model=list[TicketOut])
@@ -1595,6 +1763,274 @@ async def delete_dependency(external_id: str, prereq_external_id: str) -> None:
         await session.delete(row)
 
 
+@dataclass
+class _EligibilityReport:
+    eligible: list[Ticket]
+    ineligible: list[tuple[Ticket, str]]
+
+
+# Statuses where a task is "done" from the dev agent's perspective — used
+# to gate dependent features.
+_TASK_DONE = {"pr_open", "merged"}
+
+
+async def _resolve_eligible_tasks(
+    session: AsyncSession, parent: Ticket
+) -> _EligibilityReport:
+    """Which task tickets under `parent` are ready to start?
+
+    Rules:
+      - **Feature parent** → all direct pending task children are eligible.
+      - **Epic parent** → walk features under the epic, build the feature-
+        dependency graph, and for each feature decide if it's *ready*
+        (all its prerequisite features have ALL their tasks at status in
+        `_TASK_DONE`). Pending tasks in ready features are eligible.
+        Tasks in not-yet-ready features are reported with the reason so
+        the UI can show "skipped: feature X waiting on Y".
+      - Tasks already in flight (status != "pending") are excluded —
+        starting them again would clash with the existing workflow id.
+    """
+    if str(parent.kind) == TicketKind.feature.value:
+        rows = (
+            await session.execute(
+                select(Ticket)
+                .where(Ticket.parent_id == parent.id)
+                .where(Ticket.kind == TicketKind.task.value)
+            )
+        ).scalars().all()
+        eligible: list[Ticket] = []
+        ineligible: list[tuple[Ticket, str]] = []
+        for t in rows:
+            if str(t.status) == "pending":
+                eligible.append(t)
+            else:
+                ineligible.append((t, f"already at status {t.status}"))
+        return _EligibilityReport(eligible=eligible, ineligible=ineligible)
+
+    if str(parent.kind) != TicketKind.epic.value:
+        return _EligibilityReport(eligible=[], ineligible=[])
+
+    # Epic. Walk features → their tasks; compute readiness via deps.
+    features = (
+        await session.execute(
+            select(Ticket)
+            .where(Ticket.parent_id == parent.id)
+            .where(Ticket.kind == TicketKind.feature.value)
+        )
+    ).scalars().all()
+    feature_ids = [f.id for f in features]
+    if not feature_ids:
+        return _EligibilityReport(eligible=[], ineligible=[])
+
+    # Dependency edges. dependent_id depends on prerequisite_id.
+    edges = (
+        await session.execute(
+            select(FeatureDependency.dependent_id, FeatureDependency.prerequisite_id)
+            .where(FeatureDependency.dependent_id.in_(feature_ids))
+        )
+    ).all()
+    prereqs_of: dict[int, set[int]] = {fid: set() for fid in feature_ids}
+    for dep_id, pre_id in edges:
+        prereqs_of[dep_id].add(pre_id)
+
+    # All tasks under any feature in this epic.
+    tasks = (
+        await session.execute(
+            select(Ticket)
+            .where(Ticket.parent_id.in_(feature_ids))
+            .where(Ticket.kind == TicketKind.task.value)
+        )
+    ).scalars().all()
+
+    # Group tasks by feature so we can compute "feature is done".
+    tasks_by_feature: dict[int, list[Ticket]] = {fid: [] for fid in feature_ids}
+    for t in tasks:
+        if t.parent_id is not None:
+            tasks_by_feature.setdefault(t.parent_id, []).append(t)
+
+    def feature_is_done(fid: int) -> bool:
+        # A feature is "done" if it has tasks AND all are in done states.
+        # A feature with no tasks is vacuously not-blocking (treat as done).
+        ts = tasks_by_feature.get(fid, [])
+        if not ts:
+            return True
+        return all(str(t.status) in _TASK_DONE for t in ts)
+
+    fid_to_title = {f.id: f.title for f in features}
+
+    eligible = []
+    ineligible = []
+    for f in features:
+        unmet = [
+            pid for pid in prereqs_of.get(f.id, set()) if not feature_is_done(pid)
+        ]
+        feature_ready = not unmet
+        for t in tasks_by_feature.get(f.id, []):
+            if str(t.status) != "pending":
+                ineligible.append((t, f"already at status {t.status}"))
+                continue
+            if feature_ready:
+                eligible.append(t)
+            else:
+                blockers = ", ".join(
+                    fid_to_title.get(pid, f"#{pid}") for pid in unmet
+                ) or "unknown"
+                ineligible.append(
+                    (t, f"feature {f.title!r} waiting on: {blockers}")
+                )
+    return _EligibilityReport(eligible=eligible, ineligible=ineligible)
+
+
+@router.post(
+    "/tickets/{external_id}/start-children", response_model=StartChildrenResult
+)
+async def start_children(
+    external_id: str,
+    base_ref: str = "main",
+    dry_run: bool = False,
+) -> StartChildrenResult:
+    """Batch-start workflows for all eligible task descendants of a feature
+    or epic. **Skips the architect plan step** — synthesizes a Plan from
+    each task's body and proceeds straight to dev. Review happens at PR
+    time, not plan-approve time.
+
+    Eligibility:
+      - feature parent → all direct pending task children
+      - epic parent → pending tasks in features whose prerequisite
+        features are all done (tasks at `pr_open` or `merged`).
+
+    Pass `dry_run=true` to preview the (started, skipped) breakdown
+    without launching anything — drives the confirmation modal.
+    """
+    parent, repo = await _get_ticket_and_repo(external_id)
+    if str(parent.kind) not in {TicketKind.feature.value, TicketKind.epic.value}:
+        raise HTTPException(
+            status_code=400,
+            detail=f"start-children only works on epics or features (got {parent.kind})",
+        )
+
+    repo_root = Path(repo.local_path)
+    try:
+        registry = DomainRegistry.load(repo_root)
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+
+    async with session_scope() as session:
+        parent_row = await session.get(Ticket, parent.id)
+        if parent_row is None:
+            raise HTTPException(status_code=404, detail="ticket vanished")
+        report = await _resolve_eligible_tasks(session, parent_row)
+        # Capture task fields we'll need outside the session (the rows are
+        # detached the moment the session closes).
+        eligible_snap = [
+            (t.id, t.external_id, t.title, t.domain_name) for t in report.eligible
+        ]
+        skipped_snap = [
+            StartChildrenSkipped(
+                external_id=t.external_id, title=t.title, reason=reason
+            )
+            for t, reason in report.ineligible
+        ]
+
+    if dry_run:
+        return StartChildrenResult(
+            parent_external_id=parent.external_id,
+            parent_kind=str(parent.kind),
+            dry_run=True,
+            started=[ext for (_id, ext, _t, _d) in eligible_snap],
+            skipped=skipped_snap,
+        )
+
+    # Launch one FeatureWorkflow per eligible task, with skip_plan=True so
+    # they don't block on architect plan-approve. Failures are added to the
+    # skipped list with the error so the user sees what went wrong rather
+    # than getting a partial success that's hard to reason about.
+    settings = get_settings()
+    client = await get_temporal_client()
+    started: list[str] = []
+    for task_id, task_ext, task_title, task_domain in eligible_snap:
+        if not task_domain:
+            skipped_snap.append(
+                StartChildrenSkipped(
+                    external_id=task_ext,
+                    title=task_title,
+                    reason="task has no domain — set one before starting",
+                )
+            )
+            continue
+        try:
+            chosen = registry.get(task_domain)
+        except KeyError:
+            skipped_snap.append(
+                StartChildrenSkipped(
+                    external_id=task_ext,
+                    title=task_title,
+                    reason=f"domain {task_domain!r} not in domains.yaml",
+                )
+            )
+            continue
+        inp = FeatureWorkflowInput(
+            ticket_id=task_id,
+            domain_name=chosen.name,
+            domain_description=chosen.description,
+            domain_paths=list(chosen.paths),
+            base_ref=base_ref,
+            llm_task_queue=settings.temporal_task_queue_llm,
+            cleanup_worktree=False,
+            skip_plan=True,
+        )
+        workflow_id = feature_workflow_id(repo_root, task_ext)
+        try:
+            await client.start_workflow(
+                FeatureWorkflow.run,
+                inp,
+                id=workflow_id,
+                task_queue=settings.temporal_task_queue_features,
+                id_reuse_policy=WorkflowIDReusePolicy.ALLOW_DUPLICATE_FAILED_ONLY,
+                search_attributes=TypedSearchAttributes(
+                    [
+                        SearchAttributePair(REPO_NAME, repo_slug(repo_root)),
+                        SearchAttributePair(DOMAIN, chosen.name),
+                        SearchAttributePair(TICKET_ID, task_ext),
+                        SearchAttributePair(PRAVI_STATUS, "waiting_for_plan"),
+                    ]
+                ),
+            )
+            started.append(task_ext)
+        except RPCError as e:
+            if "WorkflowExecutionAlreadyStarted" in str(e):
+                skipped_snap.append(
+                    StartChildrenSkipped(
+                        external_id=task_ext,
+                        title=task_title,
+                        reason="workflow already running",
+                    )
+                )
+            else:
+                skipped_snap.append(
+                    StartChildrenSkipped(
+                        external_id=task_ext,
+                        title=task_title,
+                        reason=f"start failed: {type(e).__name__}: {e}",
+                    )
+                )
+
+    log.info(
+        "start_children",
+        parent=external_id,
+        kind=parent.kind,
+        started_count=len(started),
+        skipped_count=len(skipped_snap),
+    )
+    return StartChildrenResult(
+        parent_external_id=parent.external_id,
+        parent_kind=str(parent.kind),
+        dry_run=False,
+        started=started,
+        skipped=skipped_snap,
+    )
+
+
 @router.post("/tickets/{external_id}/start-workflow", response_model=CreateTicketResult)
 async def start_workflow(
     external_id: str, base_ref: str = "main"
@@ -1962,16 +2398,118 @@ async def run_stream(external_id: str):
     return EventSourceResponse(event_gen())
 
 
-def _event_to_out(evt: Event) -> RunEventOut:
+def _event_to_out(
+    evt: Event,
+    *,
+    ticket_external_id: str | None = None,
+    ticket_title: str | None = None,
+) -> RunEventOut:
     return RunEventOut(
         id=evt.id,
         ticket_id=evt.ticket_id,
+        ticket_external_id=ticket_external_id,
+        ticket_title=ticket_title,
         run_id=evt.run_id,
         kind=evt.kind,
         message=evt.message,
         payload=evt.payload,
         at=evt.at,
     )
+
+
+@router.get("/tickets/{external_id}/run/subtree-stream")
+async def run_subtree_stream(external_id: str, replay: int = 50):
+    """SSE: live timeline aggregated across every descendant task of a
+    feature or epic. Drives the "what are agents doing right now under
+    this whole subtree" feed.
+
+    Each event arrives tagged with `ticket_external_id` + `ticket_title`
+    so the UI can show which task emitted it. The most recent `replay`
+    events across the subtree are sent on connect (so reloads don't
+    blank out), then live events stream as they happen.
+
+    Unlike `/run/stream`, this endpoint never auto-closes — the user
+    keeps watching as new task workflows fire off under the parent.
+    Disconnect by closing the EventSource client-side.
+    """
+    parent, _ = await _get_ticket_and_repo(external_id)
+    if str(parent.kind) == TicketKind.task.value:
+        # Tasks have no subtree — just point them at the per-task stream.
+        raise HTTPException(
+            status_code=400,
+            detail="subtree-stream is only valid on epic or feature tickets",
+        )
+
+    # Resolve descendant task IDs once at connect. New tasks created
+    # later in this subtree (rare during a single watching session)
+    # won't auto-subscribe — they'd surface on reconnect. Acceptable
+    # trade-off vs. a re-resolve loop.
+    async with session_scope() as session:
+        task_ids = await descendant_task_ids(session, parent.id)
+        # Map ticket_id → (external_id, title) for tagging events.
+        if task_ids:
+            tag_rows = (
+                await session.execute(
+                    select(Ticket.id, Ticket.external_id, Ticket.title)
+                    .where(Ticket.id.in_(task_ids))
+                )
+            ).all()
+            tag_by_id: dict[int, tuple[str, str]] = {
+                tid: (ext, title) for tid, ext, title in tag_rows
+            }
+        else:
+            tag_by_id = {}
+
+    async def event_gen():
+        async with listen_events_many(task_ids) as queue:
+            # Replay the most recent N events across all descendant tasks.
+            async with session_scope() as session:
+                if task_ids:
+                    rows = await session.execute(
+                        select(Event)
+                        .where(Event.ticket_id.in_(task_ids))
+                        .order_by(Event.id.desc())
+                        .limit(max(1, min(replay, 500)))
+                    )
+                    replay_rows = list(rows.scalars().all())
+                    for r in replay_rows:
+                        session.expunge(r)
+                    # Send in chronological order for the UI.
+                    replay_rows.reverse()
+                else:
+                    replay_rows = []
+
+            last_yielded_id = 0
+            for evt in replay_rows:
+                last_yielded_id = max(last_yielded_id, evt.id)
+                ext, title = tag_by_id.get(evt.ticket_id, (None, None))
+                yield {
+                    "event": "run",
+                    "data": _event_to_out(
+                        evt, ticket_external_id=ext, ticket_title=title
+                    ).model_dump_json(),
+                }
+
+            # Live phase. Stays open until the client disconnects.
+            while True:
+                event_id = await queue.get()
+                if event_id <= last_yielded_id:
+                    continue
+                async with session_scope() as session:
+                    evt = await session.get(Event, event_id)
+                    if evt is None:
+                        continue
+                    session.expunge(evt)
+                last_yielded_id = evt.id
+                ext, title = tag_by_id.get(evt.ticket_id, (None, None))
+                yield {
+                    "event": "run",
+                    "data": _event_to_out(
+                        evt, ticket_external_id=ext, ticket_title=title
+                    ).model_dump_json(),
+                }
+
+    return EventSourceResponse(event_gen())
 
 
 @router.get("/tickets/{external_id}/status/stream")

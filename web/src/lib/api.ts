@@ -45,6 +45,12 @@ export interface Ticket {
   persona: string | null;
   /** ADR 0004 — what tech stack. Null = `unknown` (no extra skills hint). */
   stack: string | null;
+  /** For feature + epic tickets: count of descendant TASKs grouped by
+   * status (pending, planning, plan_approved, in_progress, pr_open,
+   * merged, failed, cancelled). Empty for tasks. The server derives the
+   * parent's `status` field from this same breakdown — these counts let
+   * the UI also show the underlying mix. */
+  child_status_counts: Record<string, number>;
 }
 
 export type PersonaStatus = "active" | "coming_soon";
@@ -82,6 +88,24 @@ export interface StackSpend {
 }
 
 export type SpendWindow = "7d" | "30d" | "all";
+
+export interface StartChildrenSkipped {
+  external_id: string;
+  title: string;
+  reason: string;
+}
+
+/** Outcome of `POST /tickets/{id}/start-children`. With `dry_run=true`,
+ * `started` is the list that *would* be launched. Without dry_run, it's
+ * the list that actually was. `skipped` includes tasks blocked by feature
+ * dependencies, tasks already running, and any per-task launch failures. */
+export interface StartChildrenResult {
+  parent_external_id: string;
+  parent_kind: "epic" | "feature" | "task";
+  dry_run: boolean;
+  started: string[];
+  skipped: StartChildrenSkipped[];
+}
 
 export interface BudgetBreakdown {
   ticket_id: number;
@@ -160,6 +184,11 @@ export interface RunRow {
 export interface RunEvent {
   id: number;
   ticket_id: number;
+  /** Populated by the subtree stream — null for per-task stream (consumer
+   * already knows the ticket). Used by the subtree feed to tag events
+   * with which task emitted them. */
+  ticket_external_id: string | null;
+  ticket_title: string | null;
   run_id: number | null;
   kind: string;
   message: string;
@@ -348,6 +377,8 @@ export interface GitHubRepoResult {
   clone_url: string | null;
   ssh_url: string | null;
   updated_at: string | null;
+  /** GitHub's count of open issues + PRs (single field, includes both). */
+  open_issues_count: number;
 }
 
 export interface CreateTicketInput {
@@ -548,6 +579,23 @@ export const api = {
     return jsonReq<PersonaSpend[]>(`/api/spend/by-persona?${params}`);
   },
 
+  /** Batch-start workflows for eligible task descendants of a feature
+   * or epic. Pass `dryRun=true` to preview which tasks would launch
+   * (used to populate the confirmation modal). Skips the architect plan
+   * step — review happens at PR time. */
+  startChildren: (
+    externalId: string,
+    opts: { dryRun?: boolean; baseRef?: string } = {},
+  ) => {
+    const params = new URLSearchParams();
+    if (opts.dryRun) params.set("dry_run", "true");
+    if (opts.baseRef) params.set("base_ref", opts.baseRef);
+    return jsonReq<StartChildrenResult>(
+      `/api/tickets/${encodeURIComponent(externalId)}/start-children?${params}`,
+      { method: "POST", body: "{}" },
+    );
+  },
+
   spendByStack: (window: SpendWindow = "all", repoId?: number) => {
     const params = new URLSearchParams({ window });
     if (repoId != null) params.set("repo_id", String(repoId));
@@ -693,6 +741,42 @@ export function subscribeRun(
     handlers.onError?.("connection lost");
   });
   return () => es.close();
+}
+
+/** SSE for the cross-task aggregated activity feed on epic + feature
+ * pages. Events arrive tagged with `ticket_external_id` / `ticket_title`
+ * so the UI can show which task emitted each one. Same protocol as
+ * `subscribeRun` but the endpoint never auto-closes — caller decides
+ * when to disconnect. */
+export function subscribeSubtreeRun(
+  externalId: string,
+  handlers: {
+    onEvent: (e: RunEvent) => void;
+    onClose?: () => void;
+    onError?: (msg: string) => void;
+  },
+  opts: { replay?: number } = {},
+): () => void {
+  const params = new URLSearchParams();
+  if (opts.replay != null) params.set("replay", String(opts.replay));
+  const qs = params.toString() ? `?${params}` : "";
+  const url = `/api/tickets/${encodeURIComponent(externalId)}/run/subtree-stream${qs}`;
+  const es = new EventSource(url);
+  es.addEventListener("run", (ev) => {
+    try {
+      const data = JSON.parse((ev as MessageEvent).data) as RunEvent;
+      handlers.onEvent(data);
+    } catch (err) {
+      handlers.onError?.(String(err));
+    }
+  });
+  es.addEventListener("error", () => {
+    handlers.onError?.("connection lost");
+  });
+  return () => {
+    handlers.onClose?.();
+    es.close();
+  };
 }
 
 // SSE wrapper: caller passes onStatus / onClose / onError; returns a cleanup fn.

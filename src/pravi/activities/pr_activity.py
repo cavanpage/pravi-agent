@@ -1,4 +1,5 @@
-"""Temporal activity: push the dev branch + open a draft PR.
+"""Temporal activity: push the dev branch + open a PR (ready-for-review
+by default; opt into draft via `PRAVI_PR_OPEN_AS_DRAFT=true`).
 
 Runs after `dev_activity`. Consumes a `SandboxHandle` instead of raw
 filesystem paths — git operations are delegated to the configured
@@ -20,6 +21,7 @@ from temporalio import activity
 
 from pravi.agents.sandbox.factory import get_sandbox
 from pravi.agents.sandbox.protocols import SandboxHandle
+from pravi.config import get_settings
 from pravi.db.models import Ticket
 from pravi.db.session import session_scope
 from pravi.services import github as gh
@@ -172,7 +174,11 @@ async def push_and_open_pr(req: PushAndOpenPRRequest) -> PushAndOpenPRResult:
         commits=n_commits,
     )
 
-    # 5) Open the draft PR.
+    # 5) Open the PR. Defaults to "ready for review" — pravi's review
+    #    gate is at PR-merge time, so a PR sitting in draft would just
+    #    add an extra "promote to ready" click. Override via
+    #    `PRAVI_PR_OPEN_AS_DRAFT=true` if you want them opened as draft.
+    settings = get_settings()
     try:
         pr = await gh.create_pull_request(
             conn.access_token,
@@ -182,7 +188,7 @@ async def push_and_open_pr(req: PushAndOpenPRRequest) -> PushAndOpenPRResult:
             base=req.base_ref,
             title=req.ticket_title,
             body=req.pr_body,
-            draft=True,
+            draft=settings.pr_open_as_draft,
         )
     except Exception as e:
         return PushAndOpenPRResult(

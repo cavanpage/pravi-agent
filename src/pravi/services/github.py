@@ -255,6 +255,10 @@ async def search_user_repos(
 
 def _normalize_repo(item: dict[str, Any]) -> dict[str, Any]:
     owner = item.get("owner") or {}
+    # `open_issues_count` is GitHub's count of *open* issues + PRs combined.
+    # It already comes back on every entry in /user/repos and /search/repositories,
+    # so the picker can show "N open" without an N+1 per-repo issues call.
+    # Caveat: includes PRs in the same count — close enough for a triage cue.
     return {
         "owner": owner.get("login"),
         "name": item.get("name"),
@@ -265,6 +269,7 @@ def _normalize_repo(item: dict[str, Any]) -> dict[str, Any]:
         "clone_url": item.get("clone_url"),
         "ssh_url": item.get("ssh_url"),
         "updated_at": item.get("updated_at"),
+        "open_issues_count": int(item.get("open_issues_count") or 0),
     }
 
 

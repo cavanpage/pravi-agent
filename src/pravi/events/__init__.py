@@ -24,7 +24,7 @@ from pravi.events.emit import (
     channel_for_ticket,
     emit_event,
 )
-from pravi.events.listen import listen_events
+from pravi.events.listen import listen_events, listen_events_many
 
 __all__ = [
     "KIND_RUN_FINISHED",
@@ -32,4 +32,5 @@ __all__ = [
     "channel_for_ticket",
     "emit_event",
     "listen_events",
+    "listen_events_many",
 ]

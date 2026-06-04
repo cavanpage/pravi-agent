@@ -50,10 +50,24 @@ fail()  { echo "${c_red}✗${c_off} $*" >&2; }
 
 # -------- 1. Stop any existing pravi processes --------
 step "stopping stale pravi processes"
-# Kill workers and uvicorn launched via `pravi web`; ignore "no such process".
-pkill -f "pravi.worker"     >/dev/null 2>&1 || true
-pkill -f "pravi.api.app:app" >/dev/null 2>&1 || true
-pkill -f "vite"              >/dev/null 2>&1 || true
+# Patterns cover:
+#   - python -m pravi.worker ...        (worker subprocesses)
+#   - uv run pravi web ... + the bin/pravi child it spawns
+#   - bin/pravi web                     (the venv-script direct invocation
+#                                        — what `uv run` leaves behind on
+#                                        the listening side)
+#   - vite (frontend dev server)
+# Ignore "no such process".
+pkill -f "pravi.worker"   >/dev/null 2>&1 || true
+pkill -f "pravi web"      >/dev/null 2>&1 || true
+pkill -f "vite"           >/dev/null 2>&1 || true
+# Belt + braces: anything still holding :8765 (e.g. orphan uvicorn) goes.
+if command -v lsof >/dev/null 2>&1; then
+  port_pid="$(lsof -ti :8765 2>/dev/null || true)"
+  if [[ -n "$port_pid" ]]; then
+    kill "$port_pid" 2>/dev/null || true
+  fi
+fi
 sleep 1
 ok "cleared"
 

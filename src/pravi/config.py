@@ -104,6 +104,12 @@ class Settings(BaseSettings):
     # Where the user lands after the OAuth dance. Usually the home page.
     github_oauth_success_redirect: str = "http://localhost:8765/"
 
+    # PR posture. When False (default), the push activity opens PRs as
+    # "ready for review" so they're immediately visible in the user's
+    # review queue — matches pravi's review-at-PR-time gate. Flip to True
+    # if you want PRs opened as draft and promoted manually later.
+    pr_open_as_draft: bool = False
+
     @property
     def worktree_base_resolved(self) -> Path:
         return self.worktree_base.expanduser().resolve()

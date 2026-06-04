@@ -91,6 +91,11 @@ class TicketOut(BaseModel):
     # null stack = `unknown` (no extra skill hint).
     persona: str | None = None
     stack: str | None = None
+    # For feature + epic tickets: count of descendant TASKs grouped by
+    # status. Used to derive a meaningful parent `status` value (otherwise
+    # features/epics get stuck at "pending" forever) and to render a
+    # per-row progress breakdown in the UI. Empty for tasks.
+    child_status_counts: dict[str, int] = {}
     # Per-ticket cumulative spend cap (USD). Null = inherit from parent /
     # env default / unlimited. See /tickets/{id}/cost-rollup for the
     # effective value after walking the chain.
@@ -352,6 +357,32 @@ class GitHubConnectionOut(BaseModel):
     created_at: datetime
 
 
+class StartChildrenSkipped(BaseModel):
+    """One task skipped by the batch-start endpoint, with a human-readable
+    reason. Surfaced in the UI as 'N tasks skipped — see why'."""
+
+    external_id: str
+    title: str
+    reason: str
+
+
+class StartChildrenResult(BaseModel):
+    """Outcome of `POST /tickets/{external_id}/start-children`.
+
+    `started` lists the tasks whose FeatureWorkflows were launched.
+    `skipped` lists tasks that weren't eligible (already started, or
+    waiting on a prerequisite feature). `dry_run=true` returns the same
+    breakdown without launching anything — used to power the confirmation
+    modal in the UI.
+    """
+
+    parent_external_id: str
+    parent_kind: str
+    dry_run: bool
+    started: list[str]  # external_ids
+    skipped: list[StartChildrenSkipped]
+
+
 class GitHubIssueLabelOut(BaseModel):
     name: str
     color: str | None = None
@@ -400,6 +431,9 @@ class GitHubRepoOut(BaseModel):
     default_branch: str = "main"
     clone_url: str | None = None
     ssh_url: str | None = None
+    # GitHub's "open issues + PRs" count for the repo. Surfaced in the
+    # picker so the user can scan for repos with backlog at a glance.
+    open_issues_count: int = 0
     updated_at: str | None = None
 
 
@@ -508,10 +542,17 @@ class RunEventOut(BaseModel):
     `kind` maps to the runner's transcript entry kinds plus the lifecycle
     sentinels `run_started` / `run_finished`. `payload` is whatever
     structured data the emitter attached (tool input, usage data, etc.).
+
+    `ticket_external_id` + `ticket_title` are populated by the SUBTREE
+    stream so the UI can tag each event with which task emitted it
+    (epic-level feed aggregates across many tasks). Per-task stream
+    leaves them null since the consumer already knows the ticket.
     """
 
     id: int
     ticket_id: int
+    ticket_external_id: str | None = None
+    ticket_title: str | None = None
     run_id: int | None
     kind: str
     message: str

@@ -625,7 +625,16 @@ function GitHubRepoPicker({
             <li key={r.full_name}>
               <button
                 type="button"
-                onClick={() => onPick(r)}
+                // Picker lives inside a `<Field>` (= `<label>`); label
+                // click semantics try to focus the first form control
+                // inside, which can race with our state update on
+                // some browsers. Stop the click from bubbling so the
+                // pick is the *only* thing that happens.
+                onClick={(e) => {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  onPick(r);
+                }}
                 className="w-full text-left px-3 py-2 hover:bg-white/[0.04] transition flex items-start gap-3"
               >
                 <div className="flex-1 min-w-0">
@@ -643,9 +652,26 @@ function GitHubRepoPicker({
                     </div>
                   ) : null}
                 </div>
-                <span className="text-[11px] text-neutral-500 font-mono shrink-0 self-center">
-                  {r.default_branch}
-                </span>
+                <div className="flex flex-col items-end gap-0.5 shrink-0 self-center">
+                  {r.open_issues_count > 0 ? (
+                    <span
+                      className="inline-flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded-full border border-emerald-400/30 bg-emerald-400/[0.08] text-emerald-200"
+                      title={`${r.open_issues_count} open issues/PRs on GitHub — single field, includes both`}
+                    >
+                      <svg viewBox="0 0 16 16" width="10" height="10" fill="currentColor" aria-hidden="true">
+                        <path d="M8 9.5a1.5 1.5 0 1 0 0-3 1.5 1.5 0 0 0 0 3Z" />
+                        <path
+                          fillRule="evenodd"
+                          d="M8 0a8 8 0 1 1 0 16A8 8 0 0 1 8 0Zm0 1.5a6.5 6.5 0 1 0 0 13 6.5 6.5 0 0 0 0-13Z"
+                        />
+                      </svg>
+                      {r.open_issues_count}
+                    </span>
+                  ) : null}
+                  <span className="text-[11px] text-neutral-500 font-mono">
+                    {r.default_branch}
+                  </span>
+                </div>
               </button>
             </li>
           ))}

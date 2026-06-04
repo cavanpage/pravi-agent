@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import React, { useCallback, useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -111,14 +111,38 @@ export function DecomposePanel({
   const [answers, setAnswers] = useState<string[]>([]);
   const [clarifySkipped, setClarifySkipped] = useState(false);
 
-  // Derive the "current" questions list — partial parse while streaming,
-  // authoritative once done.
-  const liveQuestions: ClarificationQuestion[] =
-    clarification?.status === "done"
-      ? clarification.questions
-      : clarification
-        ? partialParseQuestions(clarification.raw_md || "")
-        : [];
+  // Derive the "current" questions list. Strategy:
+  //   * status="done"   → canonical questions from the server, period.
+  //   * status="running" → partial-parse `raw_md` BUT only APPEND new
+  //                       entries to what we've already shown.
+  //
+  // The append-only rule is load-bearing for typing UX: as the architect
+  // streams, `partialParseQuestions` may first see a question WITHOUT
+  // `options:` (the YAML hasn't streamed past `options:` yet), then with
+  // options once more text arrives. If we reshaped the existing question,
+  // `QuestionAnswer` would flip from "textarea" → "radio buttons" mid-
+  // keystroke, the textarea would unmount, and the browser would jump
+  // focus to the next focusable element on the page. So once a question
+  // is on screen, we freeze its shape for the rest of streaming.
+  const [stableQuestions, setStableQuestions] = useState<ClarificationQuestion[]>([]);
+  useEffect(() => {
+    if (!clarification) {
+      setStableQuestions([]);
+      return;
+    }
+    if (clarification.status === "done") {
+      setStableQuestions(clarification.questions);
+      return;
+    }
+    const partial = partialParseQuestions(clarification.raw_md || "");
+    setStableQuestions((prev) => {
+      if (partial.length <= prev.length) return prev;
+      // New question(s) at the tail — keep the existing frozen entries +
+      // append only the newly-arrived ones.
+      return [...prev, ...partial.slice(prev.length)];
+    });
+  }, [clarification?.status, clarification?.raw_md, clarification?.questions]);
+  const liveQuestions = stableQuestions;
 
   // Grow answers to match question count without clobbering already-typed values.
   useEffect(() => {
@@ -129,6 +153,14 @@ export function DecomposePanel({
       return prev.slice(0, n);
     });
   }, [liveQuestions.length]);
+
+  // Stable answer-update callback so `<QuestionAnswer>`'s memo actually
+  // helps. Without useCallback, this arrow gets a new identity on every
+  // DecomposePanel render (every poll), defeating React.memo and causing
+  // every textarea to re-render → typing UX races with the polling tick.
+  const onAnswerChange = useCallback((i: number, v: string) => {
+    setAnswers((prev) => prev.map((a, j) => (j === i ? v : a)));
+  }, []);
 
   // ---- Phase 2: decompose (backgrounded — survives tab close) ----
   // Polled persistent draft. While status=running, raw_md streams + tool-use
@@ -219,34 +251,17 @@ export function DecomposePanel({
   // Once features exist, collapse the whole panel so the roadmap is the
   // primary surface. User can re-expand to append more features. (Approving
   // a new decomposition APPENDS to existing children, doesn't replace them.)
-  const Container = alreadyDecomposed
-    ? ({ children }: { children: React.ReactNode }) => (
-        <details className="rounded-2xl border border-purple-400/15 bg-purple-400/[0.02] open:bg-purple-400/[0.03] open:border-purple-400/20 transition group">
-          <summary className="cursor-pointer list-none px-4 py-3 flex items-center justify-between gap-3 select-none">
-            <div className="flex items-center gap-2 text-sm">
-              <span className="inline-block transition-transform group-open:rotate-90 text-neutral-500">
-                ›
-              </span>
-              <span className="text-[11px] uppercase tracking-[0.14em] font-semibold text-purple-200">
-                decompose with architect
-              </span>
-              <span className="text-xs text-neutral-500">
-                already decomposed — {childCount} feature{childCount === 1 ? "" : "s"} below.
-                Expand to add more.
-              </span>
-            </div>
-          </summary>
-          <div className="px-4 pb-4 flex flex-col gap-3">{children}</div>
-        </details>
-      )
-    : ({ children }: { children: React.ReactNode }) => (
-        <section className="rounded-2xl border border-purple-400/20 bg-purple-400/[0.03] p-4 flex flex-col gap-3">
-          {children}
-        </section>
-      );
-
-  return (
-    <Container>
+  //
+  // IMPORTANT: the wrapper element shape is chosen via inline conditional
+  // rendering — NOT a `Container` component built inside render. A locally
+  // defined component is a fresh function reference on every render, so
+  // React treats it as a different component type each time and unmounts
+  // the entire subtree (including the textarea you're typing in). That
+  // was the cause of the "cursor jumps out of the answer box every 1.5s"
+  // bug — every poll re-rendered the parent, which built a new Container,
+  // which unmounted ClarifyView + the textarea, which lost focus.
+  const body = (
+    <>
       <div className="flex items-center justify-between gap-3 flex-wrap">
         <div>
           {!alreadyDecomposed ? (
@@ -309,9 +324,7 @@ export function DecomposePanel({
           clarification={clarification}
           liveQuestions={liveQuestions}
           answers={answers}
-          onAnswerChange={(i, v) =>
-            setAnswers((prev) => prev.map((a, j) => (j === i ? v : a)))
-          }
+          onAnswerChange={onAnswerChange}
           onDraft={() => {
             setClarifySkipped(false);
             draftMut.mutate();
@@ -359,7 +372,35 @@ export function DecomposePanel({
           isApproving={approveMut.isPending}
         />
       ) : null}
-    </Container>
+    </>
+  );
+
+  if (alreadyDecomposed) {
+    return (
+      <details className="rounded-2xl border border-purple-400/15 bg-purple-400/[0.02] open:bg-purple-400/[0.03] open:border-purple-400/20 transition group">
+        <summary className="cursor-pointer list-none px-4 py-3 flex items-center justify-between gap-3 select-none">
+          <div className="flex items-center gap-2 text-sm">
+            <span className="inline-block transition-transform group-open:rotate-90 text-neutral-500">
+              ›
+            </span>
+            <span className="text-[11px] uppercase tracking-[0.14em] font-semibold text-purple-200">
+              decompose with architect
+            </span>
+            <span className="text-xs text-neutral-500">
+              already decomposed — {childCount} feature{childCount === 1 ? "" : "s"} below.
+              Expand to add more.
+            </span>
+          </div>
+        </summary>
+        <div className="px-4 pb-4 flex flex-col gap-3">{body}</div>
+      </details>
+    );
+  }
+
+  return (
+    <section className="rounded-2xl border border-purple-400/20 bg-purple-400/[0.03] p-4 flex flex-col gap-3">
+      {body}
+    </section>
   );
 }
 
@@ -386,18 +427,6 @@ function ClarifyView({
   const totalSoFar = liveQuestions.length;
   const answeredCount = answers.filter((a) => (a || "").trim().length > 0).length;
 
-  // For the "elapsed" indicator while running we use the persisted started_at.
-  // Tick once a second so the number visibly increments even between polls.
-  const [tick, setTick] = useState(0);
-  useEffect(() => {
-    if (!isRunning) return;
-    const id = setInterval(() => setTick((n) => n + 1), 1000);
-    return () => clearInterval(id);
-  }, [isRunning]);
-  // Use tick to ensure rerender (variable referenced).
-  void tick;
-  const elapsed = statusElapsedSeconds(clarification.started_at);
-
   if (isDone && liveQuestions.length === 0) {
     return (
       <div className="rounded-xl border border-white/10 bg-white/[0.02] px-4 py-3 text-sm text-neutral-300">
@@ -421,7 +450,7 @@ function ClarifyView({
         {isRunning ? (
           <span className="inline-flex items-center gap-1.5 text-purple-200">
             <span className="size-1.5 rounded-full bg-purple-300 animate-pulse" />
-            architect typing… {elapsed}s
+            architect typing… <ElapsedCounter startedAt={clarification.started_at} />s
           </span>
         ) : null}
         {isDone ? (
@@ -463,9 +492,10 @@ function ClarifyView({
               <div className="text-xs text-neutral-500 mt-1 italic">{q.why}</div>
             ) : null}
             <QuestionAnswer
+              index={i}
               question={q}
               value={answers[i] ?? ""}
-              onChange={(v) => onAnswerChange(i, v)}
+              onChange={onAnswerChange}
             />
           </li>
         ))}
@@ -679,24 +709,57 @@ function ProgressFeed({
  * `options`, free-text fallback when it didn't. When options are present,
  * we still expose a small "other (write in)" affordance so the user isn't
  * forced into a preset choice. */
-function QuestionAnswer({
+/** Self-contained 1s ticker for the elapsed counter — its `setInterval`
+ * lives here so the whole ClarifyView (questions list + textareas)
+ * doesn't re-render every second. Critical for typing UX: a per-second
+ * parent re-render combined with React Query polling collides with the
+ * user's keystrokes and the browser ends up reflowing focus. */
+function ElapsedCounter({
+  startedAt,
+}: {
+  startedAt: string | null | undefined;
+}) {
+  const [tick, setTick] = useState(0);
+  useEffect(() => {
+    const id = setInterval(() => setTick((n) => n + 1), 1000);
+    return () => clearInterval(id);
+  }, []);
+  void tick;
+  return <>{statusElapsedSeconds(startedAt)}</>;
+}
+
+
+const QuestionAnswer = React.memo(_QuestionAnswer);
+
+
+function _QuestionAnswer({
+  index,
   question,
   value,
   onChange,
 }: {
+  index: number;
   question: ClarificationQuestion;
   value: string;
-  onChange: (v: string) => void;
+  /** Stable across renders — receives the question index so the same
+   * function can be reused for every QuestionAnswer in the list (avoids
+   * per-iteration arrow allocations defeating React.memo). */
+  onChange: (i: number, v: string) => void;
 }) {
   const hasOptions = !!question.options && question.options.length > 0;
   const matchesOption = hasOptions && question.options!.includes(value);
   const [otherOpen, setOtherOpen] = useState(false);
 
+  // Index-bound onChange — created once per (index, onChange) so the
+  // textarea / radios get a stable callback as long as the parent's
+  // onChange is stable.
+  const set = useCallback((v: string) => onChange(index, v), [index, onChange]);
+
   if (!hasOptions) {
     return (
       <textarea
         value={value}
-        onChange={(e) => onChange(e.target.value)}
+        onChange={(e) => set(e.target.value)}
         placeholder="your answer (or leave blank to let the architect assume)"
         rows={2}
         className="mt-2 w-full px-3 py-2 rounded-lg bg-white/[0.03] border border-white/10 text-sm text-neutral-100 placeholder-neutral-600 focus:outline-none focus:border-purple-400/40 transition resize-none"
@@ -723,7 +786,7 @@ function QuestionAnswer({
               type="radio"
               checked={selected}
               onChange={() => {
-                onChange(opt);
+                set(opt);
                 setOtherOpen(false);
               }}
               className="mt-0.5 accent-purple-400"
@@ -737,7 +800,7 @@ function QuestionAnswer({
           type="button"
           onClick={() => {
             setOtherOpen(true);
-            onChange("");
+            set("");
           }}
           className="self-start text-xs text-purple-300 hover:text-purple-200 transition"
         >
@@ -746,7 +809,7 @@ function QuestionAnswer({
       ) : (
         <textarea
           value={value}
-          onChange={(e) => onChange(e.target.value)}
+          onChange={(e) => set(e.target.value)}
           placeholder="other answer…"
           rows={2}
           autoFocus
