@@ -58,10 +58,10 @@ def test_get_dev_agent_returns_claude(monkeypatch):
 def test_context_builder_includes_listed_files(tmp_path: Path):
     """`build_context` should embed files named in `context_files` and a tree
     of files matching the domain paths."""
-    from pravi.agents.architects.context import build_context
-
     # Set up a minimal git repo so `git ls-files` returns something.
     import subprocess
+
+    from pravi.agents.architects.context import build_context
 
     subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
     subprocess.run(

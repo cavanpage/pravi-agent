@@ -273,6 +273,35 @@ async def get_cost_rollup(external_id: str) -> CostRollupOut:
     )
 
 
+def _resolve_persona_stack(
+    *,
+    req_persona: str | None,
+    req_stack: str | None,
+    parent_persona: str | None,
+    parent_stack: str | None,
+) -> tuple[str | None, str | None]:
+    """Resolve a ticket's persona + stack at create time. Explicit request
+    values win; otherwise inherit from the parent. `None` on both = use the
+    catalog defaults at runtime. ADR 0004.
+
+    Pure function: lifted out of `create_ticket` so the inheritance rules
+    are unit-testable without seeding a Repo/Ticket row.
+    """
+    # NB: distinguish None (= unset, inherit) from "" (= the form sent an
+    # empty string; treat as a clear). Empty string never inherits.
+    if req_persona is not None:
+        persona = req_persona or None
+    else:
+        persona = parent_persona
+
+    if req_stack is not None:
+        stack = req_stack or None
+    else:
+        stack = parent_stack
+
+    return persona, stack
+
+
 async def _reject_if_ceiling_exceeds_parent(
     session,
     parent_id: int | None,
@@ -650,17 +679,12 @@ async def create_ticket(req: CreateTicketRequest) -> CreateTicketResult:
             )
 
         # Persona + stack: explicit request value wins; otherwise inherit
-        # from the parent (so all children of a "backend"-tagged feature
-        # default to backend). Null at both → catalog defaults at runtime.
-        resolved_persona = (
-            req.persona
-            if req.persona is not None
-            else (parent_row.persona if parent_row is not None else None)
-        )
-        resolved_stack = (
-            req.stack
-            if req.stack is not None
-            else (parent_row.stack if parent_row is not None else None)
+        # from the parent. See `_resolve_persona_stack` + ADR 0004.
+        resolved_persona, resolved_stack = _resolve_persona_stack(
+            req_persona=req.persona,
+            req_stack=req.stack,
+            parent_persona=parent_row.persona if parent_row is not None else None,
+            parent_stack=parent_row.stack if parent_row is not None else None,
         )
 
         if existing_ticket is None:
