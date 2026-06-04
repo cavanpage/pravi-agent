@@ -1,0 +1,15 @@
+# Minimal pravi-agent domains.yaml — pravi dogfooding itself.
+domains:
+  - name: backend
+    paths: ["src/pravi/**"]
+    description: "Pravi's Python backend — FastAPI + Temporal + activities."
+    test: "uv run pytest -q"
+    build: "uv run ruff check src/pravi"
+    context_files: ["README.md", "docs/adr/README.md"]
+
+  - name: web
+    paths: ["web/src/**"]
+    description: "Pravi's React UI."
+    test: "cd web && npx tsc --noEmit"
+    build: "cd web && npx vite build"
+    context_files: ["web/package.json"]
