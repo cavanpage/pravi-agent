@@ -75,6 +75,16 @@ Principles:
 > as ADRs in [docs/adr/](docs/adr/) with honest tradeoffs and the
 > "revisit when…" triggers that would push us to change course.
 
+## Documentation
+
+- **[User guide](docs/user-guide/README.md)** — index of the four guides for
+  bringing pravi to your own repo: `.builder/domains.yaml`, GitHub OAuth,
+  the persona/stack catalog, and budget ceilings + spend views.
+- **[Architecture decision records](docs/adr/README.md)** — the "why" behind
+  Temporal, the LLM-agnostic architect, sandbox seams, personas, and no-RAG.
+- **[LLM shakedown notes](docs/llm-shakedown.md)** — empirical notes from
+  exercising the architect/dev loop against real repos.
+
 ## Quickstart
 
 ```bash
