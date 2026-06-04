@@ -17,6 +17,12 @@ event payload for every descendant task. The SDK populates that field from
 token counts × Anthropic's API rates — on a Pro account those are *notional*
 dollars (no money changes hands), but they still track quota burn linearly.
 """
+from pravi.budget.by_persona import (
+    PersonaSpend,
+    StackSpend,
+    aggregate_by_persona,
+    aggregate_by_stack,
+)
 from pravi.budget.rollup import (
     BudgetBreakdown,
     BudgetRollup,
@@ -29,6 +35,10 @@ from pravi.budget.rollup import (
 __all__ = [
     "BudgetBreakdown",
     "BudgetRollup",
+    "PersonaSpend",
+    "StackSpend",
+    "aggregate_by_persona",
+    "aggregate_by_stack",
     "cost_rollup",
     "descendant_task_ids",
     "effective_remaining",

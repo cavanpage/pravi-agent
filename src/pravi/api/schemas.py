@@ -304,6 +304,27 @@ class RoadmapOut(BaseModel):
     cyclic_external_ids: list[str] = []
 
 
+class PersonaSpendOut(BaseModel):
+    """One row of the per-persona spend dashboard (ADR 0004 FinOps slice).
+
+    `persona` is always a slug — null on the ticket resolves to `other`
+    server-side so the UI can match the same row across renders. The
+    persona's display name + group come from `/api/personas`.
+    """
+
+    persona: str
+    spent_usd: float
+    run_count: int
+    ticket_count: int
+
+
+class StackSpendOut(BaseModel):
+    stack: str
+    spent_usd: float
+    run_count: int
+    ticket_count: int
+
+
 class PersonaOut(BaseModel):
     """Catalog entry for the /api/personas endpoint — drives the picker."""
 

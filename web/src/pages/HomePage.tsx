@@ -6,6 +6,7 @@ import { api, Persona, Ticket, TicketKind } from "../lib/api";
 import { SortKey, useHomeViewState } from "../lib/useHomeViewState";
 import { GitHubConnectButton } from "../components/GitHubConnectButton";
 import { PersonaChip } from "../components/PersonaChip";
+import { PersonaSpendCard } from "../components/PersonaSpendCard";
 import { StatusBadge } from "../components/StatusBadge";
 
 // Tickets in these statuses need human action on the plan.
@@ -279,6 +280,8 @@ export function HomePage() {
           </ul>
         )}
       </section>
+
+      <PersonaSpendCard personaCatalog={personaCatalog} />
 
       <Section
         title={`Closed ${inFlightKind === "task" ? "tasks" : `${inFlightKind}s`}`}

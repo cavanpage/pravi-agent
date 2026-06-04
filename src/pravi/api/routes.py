@@ -43,6 +43,7 @@ from pravi.api.schemas import (
     DomainOut,
     PersistedClarificationOut,
     PersonaOut,
+    PersonaSpendOut,
     PlanApproveOut,
     PlanApproveRequest,
     PlanDraftRequest,
@@ -53,12 +54,13 @@ from pravi.api.schemas import (
     RunEventOut,
     RunOut,
     StackOut,
+    StackSpendOut,
     TicketBudgetUpdate,
     TicketOut,
     WorkflowStatusEvent,
 )
 from pravi.api.temporal_client import get_temporal_client
-from pravi.budget import cost_rollup
+from pravi.budget import aggregate_by_persona, aggregate_by_stack, cost_rollup
 from pravi.config import get_settings
 from pravi.db.models import (
     AgentDraft,
@@ -369,6 +371,54 @@ async def list_personas() -> list[PersonaOut]:
             baseline_skills=list(p.baseline_skills),
         )
         for p in ALL_PERSONAS
+    ]
+
+
+@router.get("/spend/by-persona", response_model=list[PersonaSpendOut])
+async def spend_by_persona(
+    window: str = "all",  # "7d" | "30d" | "all"
+    repo_id: int | None = None,
+) -> list[PersonaSpendOut]:
+    """Sum of dev-run cost grouped by ticket persona.
+
+    Drives the per-persona FinOps widget on the dashboard. NULL persona
+    on a ticket aggregates under `other`. `window` accepts `7d`, `30d`,
+    or `all` (default all-time). Optional `repo_id` scopes to one repo.
+    """
+    async with session_scope() as session:
+        rows = await aggregate_by_persona(
+            session, window=window, repo_id=repo_id
+        )
+    return [
+        PersonaSpendOut(
+            persona=r.persona,
+            spent_usd=r.spent_usd,
+            run_count=r.run_count,
+            ticket_count=r.ticket_count,
+        )
+        for r in rows
+    ]
+
+
+@router.get("/spend/by-stack", response_model=list[StackSpendOut])
+async def spend_by_stack(
+    window: str = "all",
+    repo_id: int | None = None,
+) -> list[StackSpendOut]:
+    """Sum of dev-run cost grouped by ticket stack. Same shape as
+    `/spend/by-persona`; NULL stack aggregates under `unknown`."""
+    async with session_scope() as session:
+        rows = await aggregate_by_stack(
+            session, window=window, repo_id=repo_id
+        )
+    return [
+        StackSpendOut(
+            stack=r.stack,
+            spent_usd=r.spent_usd,
+            run_count=r.run_count,
+            ticket_count=r.ticket_count,
+        )
+        for r in rows
     ]
 
 

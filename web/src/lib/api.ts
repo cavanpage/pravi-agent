@@ -64,6 +64,25 @@ export interface Stack {
   additional_skills: string[];
 }
 
+/** Per-persona / per-stack spend rollup row (ADR 0004 FinOps slice).
+ * `persona` / `stack` are slugs; null on the ticket aggregates under
+ * `other` / `unknown` server-side. */
+export interface PersonaSpend {
+  persona: string;
+  spent_usd: number;
+  run_count: number;
+  ticket_count: number;
+}
+
+export interface StackSpend {
+  stack: string;
+  spent_usd: number;
+  run_count: number;
+  ticket_count: number;
+}
+
+export type SpendWindow = "7d" | "30d" | "all";
+
 export interface BudgetBreakdown {
   ticket_id: number;
   external_id: string;
@@ -520,6 +539,20 @@ export const api = {
   listPersonas: () => jsonReq<Persona[]>("/api/personas"),
 
   listStacks: () => jsonReq<Stack[]>("/api/stacks"),
+
+  /** Per-persona spend rollup. `window` defaults to "all"; pass "7d" or
+   * "30d" to scope. `repoId` optionally filters to one repo. */
+  spendByPersona: (window: SpendWindow = "all", repoId?: number) => {
+    const params = new URLSearchParams({ window });
+    if (repoId != null) params.set("repo_id", String(repoId));
+    return jsonReq<PersonaSpend[]>(`/api/spend/by-persona?${params}`);
+  },
+
+  spendByStack: (window: SpendWindow = "all", repoId?: number) => {
+    const params = new URLSearchParams({ window });
+    if (repoId != null) params.set("repo_id", String(repoId));
+    return jsonReq<StackSpend[]>(`/api/spend/by-stack?${params}`);
+  },
 
   listDomainsForPath: (repoPath: string, domainsFile?: string) => {
     const params = new URLSearchParams({ repo_path: repoPath });
