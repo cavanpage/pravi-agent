@@ -1,0 +1,3588 @@
+{
+  "components": {
+    "schemas": {
+      "AddDependencyRequest": {
+        "description": "Add a `dependent_external_id` \u2192 `prerequisite_external_id` edge.\n\nBoth must be features under the same epic. Server validates + rejects\ncycles by recomputing the topological sort after the proposed add.",
+        "properties": {
+          "prerequisite_external_id": {
+            "title": "Prerequisite External Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "prerequisite_external_id"
+        ],
+        "title": "AddDependencyRequest",
+        "type": "object"
+      },
+      "AgentDraftOut": {
+        "description": "Latest agent draft (decompose or plan) for a ticket \u2014 what the UI polls.\n\n`kind` is \"decompose\" or \"plan\". `payload` shape varies:\n  - decompose: {\"features\": [{title, description, domain, depends_on,\n                              tasks: [{title, description}]}, ...]}\n  - plan:      {\"plan_md\": \"...\", \"domain_name\": \"...\"}\n`raw_md` is the streamed architect output (markdown + tool-use comment\nmarkers the UI extracts as a live activity feed).",
+        "properties": {
+          "completed_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Completed At"
+          },
+          "duration_ms": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Duration Ms"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error"
+          },
+          "id": {
+            "title": "Id",
+            "type": "integer"
+          },
+          "kind": {
+            "title": "Kind",
+            "type": "string"
+          },
+          "num_turns": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Num Turns"
+          },
+          "payload": {
+            "additionalProperties": true,
+            "title": "Payload",
+            "type": "object"
+          },
+          "prompt_version": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Prompt Version"
+          },
+          "raw_md": {
+            "title": "Raw Md",
+            "type": "string"
+          },
+          "started_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Started At"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          },
+          "ticket_id": {
+            "title": "Ticket Id",
+            "type": "integer"
+          },
+          "total_cost_usd": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Total Cost Usd"
+          },
+          "updated_at": {
+            "format": "date-time",
+            "title": "Updated At",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "ticket_id",
+          "kind",
+          "status",
+          "raw_md",
+          "payload",
+          "prompt_version",
+          "num_turns",
+          "duration_ms",
+          "total_cost_usd",
+          "error",
+          "started_at",
+          "completed_at",
+          "updated_at"
+        ],
+        "title": "AgentDraftOut",
+        "type": "object"
+      },
+      "BudgetBreakdownOut": {
+        "properties": {
+          "external_id": {
+            "title": "External Id",
+            "type": "string"
+          },
+          "kind": {
+            "title": "Kind",
+            "type": "string"
+          },
+          "own_ceiling_usd": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Own Ceiling Usd"
+          },
+          "remaining_usd": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Remaining Usd"
+          },
+          "spent_usd": {
+            "title": "Spent Usd",
+            "type": "number"
+          },
+          "ticket_id": {
+            "title": "Ticket Id",
+            "type": "integer"
+          },
+          "title": {
+            "title": "Title",
+            "type": "string"
+          }
+        },
+        "required": [
+          "ticket_id",
+          "external_id",
+          "kind",
+          "title",
+          "own_ceiling_usd",
+          "spent_usd",
+          "remaining_usd"
+        ],
+        "title": "BudgetBreakdownOut",
+        "type": "object"
+      },
+      "BulkDeleteRequest": {
+        "description": "Delete each of these tickets and their full subtrees.\n\nServer deduplicates: if the selection contains both an epic and one of\nits descendants, the descendant is filtered out (it'd be deleted by the\nepic's cascade anyway). Returns counts + the resolved root external_ids\nso the UI can confirm what actually went.",
+        "properties": {
+          "external_ids": {
+            "items": {
+              "type": "string"
+            },
+            "title": "External Ids",
+            "type": "array"
+          }
+        },
+        "required": [
+          "external_ids"
+        ],
+        "title": "BulkDeleteRequest",
+        "type": "object"
+      },
+      "BulkDeleteResult": {
+        "properties": {
+          "deleted_root_external_ids": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Deleted Root External Ids",
+            "type": "array"
+          },
+          "deleted_ticket_count": {
+            "title": "Deleted Ticket Count",
+            "type": "integer"
+          },
+          "not_found_external_ids": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Not Found External Ids",
+            "type": "array"
+          },
+          "workflows_terminated": {
+            "title": "Workflows Terminated",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "deleted_root_external_ids",
+          "not_found_external_ids",
+          "deleted_ticket_count",
+          "workflows_terminated"
+        ],
+        "title": "BulkDeleteResult",
+        "type": "object"
+      },
+      "ClarificationQAIn": {
+        "properties": {
+          "answer": {
+            "default": "",
+            "title": "Answer",
+            "type": "string"
+          },
+          "question": {
+            "title": "Question",
+            "type": "string"
+          },
+          "why": {
+            "default": "",
+            "title": "Why",
+            "type": "string"
+          }
+        },
+        "required": [
+          "question"
+        ],
+        "title": "ClarificationQAIn",
+        "type": "object"
+      },
+      "ClarificationQuestionOut": {
+        "properties": {
+          "options": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Options",
+            "type": "array"
+          },
+          "text": {
+            "title": "Text",
+            "type": "string"
+          },
+          "why": {
+            "default": "",
+            "title": "Why",
+            "type": "string"
+          }
+        },
+        "required": [
+          "text"
+        ],
+        "title": "ClarificationQuestionOut",
+        "type": "object"
+      },
+      "ClarifyDraftOut": {
+        "description": "Architect's pre-decomposition clarifying questions.\n\n`questions=[]` with no errors means the architect chose not to ask \u2014 the\nUI should let the user proceed straight to decomposition.",
+        "properties": {
+          "duration_ms": {
+            "title": "Duration Ms",
+            "type": "integer"
+          },
+          "errors": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Errors",
+            "type": "array"
+          },
+          "num_turns": {
+            "title": "Num Turns",
+            "type": "integer"
+          },
+          "prompt_version": {
+            "title": "Prompt Version",
+            "type": "string"
+          },
+          "questions": {
+            "items": {
+              "$ref": "#/components/schemas/ClarificationQuestionOut"
+            },
+            "title": "Questions",
+            "type": "array"
+          },
+          "raw_md": {
+            "title": "Raw Md",
+            "type": "string"
+          },
+          "total_cost_usd": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Total Cost Usd"
+          }
+        },
+        "required": [
+          "raw_md",
+          "questions",
+          "prompt_version",
+          "duration_ms",
+          "num_turns",
+          "total_cost_usd"
+        ],
+        "title": "ClarifyDraftOut",
+        "type": "object"
+      },
+      "CostRollupOut": {
+        "description": "Response for `/api/tickets/{external_id}/cost-rollup`.\n\n`chain` is self first, then each ancestor in order. UI can show which\nlevel is currently the binding constraint via `constraint_source`.",
+        "properties": {
+          "chain": {
+            "items": {
+              "$ref": "#/components/schemas/BudgetBreakdownOut"
+            },
+            "title": "Chain",
+            "type": "array"
+          },
+          "constraint_source": {
+            "title": "Constraint Source",
+            "type": "string"
+          },
+          "effective_remaining_usd": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Effective Remaining Usd"
+          },
+          "external_id": {
+            "title": "External Id",
+            "type": "string"
+          },
+          "kind": {
+            "title": "Kind",
+            "type": "string"
+          },
+          "own_ceiling_usd": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Own Ceiling Usd"
+          },
+          "own_spent_usd": {
+            "title": "Own Spent Usd",
+            "type": "number"
+          },
+          "ticket_id": {
+            "title": "Ticket Id",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "ticket_id",
+          "external_id",
+          "kind",
+          "own_ceiling_usd",
+          "own_spent_usd",
+          "effective_remaining_usd",
+          "constraint_source",
+          "chain"
+        ],
+        "title": "CostRollupOut",
+        "type": "object"
+      },
+      "CreateTicketRequest": {
+        "properties": {
+          "base_ref": {
+            "default": "main",
+            "title": "Base Ref",
+            "type": "string"
+          },
+          "body": {
+            "default": "",
+            "title": "Body",
+            "type": "string"
+          },
+          "cleanup_worktree": {
+            "default": false,
+            "title": "Cleanup Worktree",
+            "type": "boolean"
+          },
+          "cost_ceiling_usd": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cost Ceiling Usd"
+          },
+          "domain_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Domain Name"
+          },
+          "external_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "External Id"
+          },
+          "github_issue": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/GitHubIssueRef"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "github_repo": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/GitHubRepoRef"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "kind": {
+            "default": "task",
+            "title": "Kind",
+            "type": "string"
+          },
+          "parent_external_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Parent External Id"
+          },
+          "persona": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Persona"
+          },
+          "repo_path": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Repo Path"
+          },
+          "stack": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Stack"
+          },
+          "title": {
+            "title": "Title",
+            "type": "string"
+          }
+        },
+        "required": [
+          "title"
+        ],
+        "title": "CreateTicketRequest",
+        "type": "object"
+      },
+      "CreateTicketResult": {
+        "properties": {
+          "external_id": {
+            "title": "External Id",
+            "type": "string"
+          },
+          "ticket_id": {
+            "title": "Ticket Id",
+            "type": "integer"
+          },
+          "web_url": {
+            "title": "Web Url",
+            "type": "string"
+          },
+          "workflow_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Workflow Id"
+          }
+        },
+        "required": [
+          "external_id",
+          "ticket_id",
+          "workflow_id",
+          "web_url"
+        ],
+        "title": "CreateTicketResult",
+        "type": "object"
+      },
+      "DecomposeApproveOut": {
+        "description": "External IDs of the rows just created \u2014 useful so the UI can refresh.",
+        "properties": {
+          "feature_external_ids": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Feature External Ids",
+            "type": "array"
+          },
+          "task_external_ids": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Task External Ids",
+            "type": "array"
+          }
+        },
+        "required": [
+          "feature_external_ids",
+          "task_external_ids"
+        ],
+        "title": "DecomposeApproveOut",
+        "type": "object"
+      },
+      "DecomposeApproveRequest": {
+        "description": "The (possibly edited) markdown the user is approving.\n\nServer re-parses the YAML block and materializes feature + task rows.\nNo workflows are started here; each task workflow boots lazily when the\nuser opens the task page and clicks \"start workflow\".",
+        "properties": {
+          "approver": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Approver"
+          },
+          "raw_md": {
+            "title": "Raw Md",
+            "type": "string"
+          }
+        },
+        "required": [
+          "raw_md"
+        ],
+        "title": "DecomposeApproveRequest",
+        "type": "object"
+      },
+      "DecomposeDraftRequest": {
+        "description": "Optional clarifications gathered from the clarify step.",
+        "properties": {
+          "clarifications": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/ClarificationQAIn"
+            },
+            "title": "Clarifications",
+            "type": "array"
+          }
+        },
+        "title": "DecomposeDraftRequest",
+        "type": "object"
+      },
+      "DomainOut": {
+        "properties": {
+          "build": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Build"
+          },
+          "description": {
+            "title": "Description",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "paths": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Paths",
+            "type": "array"
+          },
+          "test": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Test"
+          }
+        },
+        "required": [
+          "name",
+          "description",
+          "paths",
+          "test",
+          "build"
+        ],
+        "title": "DomainOut",
+        "type": "object"
+      },
+      "GitHubConnectionOut": {
+        "description": "Active GitHub connection (or null if user hasn't connected yet).",
+        "properties": {
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "github_user_avatar_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Github User Avatar Url"
+          },
+          "github_user_login": {
+            "title": "Github User Login",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "integer"
+          },
+          "scopes": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Scopes"
+          }
+        },
+        "required": [
+          "id",
+          "github_user_login",
+          "github_user_avatar_url",
+          "scopes",
+          "created_at"
+        ],
+        "title": "GitHubConnectionOut",
+        "type": "object"
+      },
+      "GitHubIssueLabelOut": {
+        "properties": {
+          "color": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Color"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "title": "GitHubIssueLabelOut",
+        "type": "object"
+      },
+      "GitHubIssueOut": {
+        "description": "One issue from the issues-list endpoint. Filters out pull requests.",
+        "properties": {
+          "body": {
+            "default": "",
+            "title": "Body",
+            "type": "string"
+          },
+          "comments": {
+            "default": 0,
+            "title": "Comments",
+            "type": "integer"
+          },
+          "created_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Created At"
+          },
+          "html_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Html Url"
+          },
+          "labels": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/GitHubIssueLabelOut"
+            },
+            "title": "Labels",
+            "type": "array"
+          },
+          "number": {
+            "title": "Number",
+            "type": "integer"
+          },
+          "state": {
+            "default": "open",
+            "title": "State",
+            "type": "string"
+          },
+          "title": {
+            "title": "Title",
+            "type": "string"
+          },
+          "updated_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Updated At"
+          },
+          "user_avatar_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "User Avatar Url"
+          },
+          "user_login": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "User Login"
+          }
+        },
+        "required": [
+          "number",
+          "title"
+        ],
+        "title": "GitHubIssueOut",
+        "type": "object"
+      },
+      "GitHubIssueRef": {
+        "description": "Where a ticket came from on the GitHub side. When attached to a\ncreate-ticket request, the server best-effort comments + labels the\nissue after the ticket lands, and stamps the URL on the ticket row.",
+        "properties": {
+          "html_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Html Url"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "number": {
+            "title": "Number",
+            "type": "integer"
+          },
+          "owner": {
+            "title": "Owner",
+            "type": "string"
+          }
+        },
+        "required": [
+          "owner",
+          "name",
+          "number"
+        ],
+        "title": "GitHubIssueRef",
+        "type": "object"
+      },
+      "GitHubRepoOut": {
+        "description": "One repo from `/api/auth/github/repos/search`.\n\nMirrors what the new-ticket picker needs: enough to display + enough to\nlater clone. `clone_url` is the HTTPS form; a token is injected at clone\ntime, never stored at rest on the repo's git remote.",
+        "properties": {
+          "clone_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Clone Url"
+          },
+          "default_branch": {
+            "default": "main",
+            "title": "Default Branch",
+            "type": "string"
+          },
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description"
+          },
+          "full_name": {
+            "title": "Full Name",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "owner": {
+            "title": "Owner",
+            "type": "string"
+          },
+          "private": {
+            "default": false,
+            "title": "Private",
+            "type": "boolean"
+          },
+          "ssh_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ssh Url"
+          },
+          "updated_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Updated At"
+          }
+        },
+        "required": [
+          "owner",
+          "name",
+          "full_name"
+        ],
+        "title": "GitHubRepoOut",
+        "type": "object"
+      },
+      "GitHubRepoRef": {
+        "description": "Coordinates from the GitHub search picker.\n\nWhen set on a create-ticket request and `repo_path` is empty, the server\nclones the repo (idempotent, into clone_base) and creates / reuses the\nRepo row before creating the ticket. Lets the user pick a repo from\nGitHub without typing a local path.",
+        "properties": {
+          "clone_url": {
+            "title": "Clone Url",
+            "type": "string"
+          },
+          "default_branch": {
+            "default": "main",
+            "title": "Default Branch",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "owner": {
+            "title": "Owner",
+            "type": "string"
+          }
+        },
+        "required": [
+          "owner",
+          "name",
+          "clone_url"
+        ],
+        "title": "GitHubRepoRef",
+        "type": "object"
+      },
+      "HTTPValidationError": {
+        "properties": {
+          "detail": {
+            "items": {
+              "$ref": "#/components/schemas/ValidationError"
+            },
+            "title": "Detail",
+            "type": "array"
+          }
+        },
+        "title": "HTTPValidationError",
+        "type": "object"
+      },
+      "PersistedClarificationOut": {
+        "description": "Latest clarification record for an epic.\n\n`status` lifecycle: pending \u2192 running \u2192 done | failed.\n`raw_md` updates progressively while running so the UI can partial-parse\nquestions; on `done`, `questions` is the canonical list.",
+        "properties": {
+          "completed_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Completed At"
+          },
+          "duration_ms": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Duration Ms"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error"
+          },
+          "id": {
+            "title": "Id",
+            "type": "integer"
+          },
+          "num_turns": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Num Turns"
+          },
+          "prompt_version": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Prompt Version"
+          },
+          "questions": {
+            "items": {
+              "$ref": "#/components/schemas/ClarificationQuestionOut"
+            },
+            "title": "Questions",
+            "type": "array"
+          },
+          "raw_md": {
+            "title": "Raw Md",
+            "type": "string"
+          },
+          "started_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Started At"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          },
+          "ticket_id": {
+            "title": "Ticket Id",
+            "type": "integer"
+          },
+          "total_cost_usd": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Total Cost Usd"
+          },
+          "updated_at": {
+            "format": "date-time",
+            "title": "Updated At",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "ticket_id",
+          "status",
+          "raw_md",
+          "questions",
+          "prompt_version",
+          "num_turns",
+          "duration_ms",
+          "total_cost_usd",
+          "error",
+          "started_at",
+          "completed_at",
+          "updated_at"
+        ],
+        "title": "PersistedClarificationOut",
+        "type": "object"
+      },
+      "PersonaOut": {
+        "description": "Catalog entry for the /api/personas endpoint \u2014 drives the picker.",
+        "properties": {
+          "baseline_skills": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Baseline Skills",
+            "type": "array"
+          },
+          "description": {
+            "title": "Description",
+            "type": "string"
+          },
+          "group": {
+            "title": "Group",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "slug": {
+            "title": "Slug",
+            "type": "string"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "slug",
+          "name",
+          "group",
+          "status",
+          "description"
+        ],
+        "title": "PersonaOut",
+        "type": "object"
+      },
+      "PersonaSpendOut": {
+        "description": "One row of the per-persona spend dashboard (ADR 0004 FinOps slice).\n\n`persona` is always a slug \u2014 null on the ticket resolves to `other`\nserver-side so the UI can match the same row across renders. The\npersona's display name + group come from `/api/personas`.",
+        "properties": {
+          "persona": {
+            "title": "Persona",
+            "type": "string"
+          },
+          "run_count": {
+            "title": "Run Count",
+            "type": "integer"
+          },
+          "spent_usd": {
+            "title": "Spent Usd",
+            "type": "number"
+          },
+          "ticket_count": {
+            "title": "Ticket Count",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "persona",
+          "spent_usd",
+          "run_count",
+          "ticket_count"
+        ],
+        "title": "PersonaSpendOut",
+        "type": "object"
+      },
+      "PlanApproveOut": {
+        "properties": {
+          "plan_id": {
+            "title": "Plan Id",
+            "type": "integer"
+          },
+          "signalled": {
+            "title": "Signalled",
+            "type": "boolean"
+          },
+          "workflow_id": {
+            "title": "Workflow Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "plan_id",
+          "signalled",
+          "workflow_id"
+        ],
+        "title": "PlanApproveOut",
+        "type": "object"
+      },
+      "PlanApproveRequest": {
+        "properties": {
+          "approver": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Approver"
+          },
+          "content_md": {
+            "title": "Content Md",
+            "type": "string"
+          },
+          "domain_name": {
+            "title": "Domain Name",
+            "type": "string"
+          },
+          "domains_file": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Domains File"
+          }
+        },
+        "required": [
+          "content_md",
+          "domain_name"
+        ],
+        "title": "PlanApproveRequest",
+        "type": "object"
+      },
+      "PlanDraftRequest": {
+        "properties": {
+          "domain_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Domain Name"
+          },
+          "domains_file": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Domains File"
+          }
+        },
+        "title": "PlanDraftRequest",
+        "type": "object"
+      },
+      "RepoOut": {
+        "properties": {
+          "github_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Github Name"
+          },
+          "github_owner": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Github Owner"
+          },
+          "id": {
+            "title": "Id",
+            "type": "integer"
+          },
+          "local_path": {
+            "title": "Local Path",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "local_path"
+        ],
+        "title": "RepoOut",
+        "type": "object"
+      },
+      "RoadmapFeatureOut": {
+        "description": "Feature row enriched with its prerequisite external IDs \u2014 drives the\nroadmap view. `external_id` matches the Ticket's external_id.",
+        "properties": {
+          "child_count": {
+            "title": "Child Count",
+            "type": "integer"
+          },
+          "domain_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Domain Name"
+          },
+          "external_id": {
+            "title": "External Id",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "integer"
+          },
+          "prerequisite_external_ids": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Prerequisite External Ids",
+            "type": "array"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          },
+          "title": {
+            "title": "Title",
+            "type": "string"
+          },
+          "workflow_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Workflow Id"
+          }
+        },
+        "required": [
+          "id",
+          "external_id",
+          "title",
+          "status",
+          "domain_name",
+          "workflow_id",
+          "child_count",
+          "prerequisite_external_ids"
+        ],
+        "title": "RoadmapFeatureOut",
+        "type": "object"
+      },
+      "RoadmapOut": {
+        "properties": {
+          "cyclic_external_ids": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Cyclic External Ids",
+            "type": "array"
+          },
+          "epic_external_id": {
+            "title": "Epic External Id",
+            "type": "string"
+          },
+          "waves": {
+            "items": {
+              "$ref": "#/components/schemas/RoadmapWaveOut"
+            },
+            "title": "Waves",
+            "type": "array"
+          }
+        },
+        "required": [
+          "epic_external_id",
+          "waves"
+        ],
+        "title": "RoadmapOut",
+        "type": "object"
+      },
+      "RoadmapWaveOut": {
+        "description": "One layer in the topological sort. All features in a wave are\nindependent of each other (within the epic) and can be worked on in\nparallel; features in wave N depend only on waves < N.",
+        "properties": {
+          "features": {
+            "items": {
+              "$ref": "#/components/schemas/RoadmapFeatureOut"
+            },
+            "title": "Features",
+            "type": "array"
+          },
+          "index": {
+            "title": "Index",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "index",
+          "features"
+        ],
+        "title": "RoadmapWaveOut",
+        "type": "object"
+      },
+      "RunOut": {
+        "description": "One row on the /runs dashboard.\n\nCombines the Run row (lifecycle) with metrics pulled from its\n`run_finished` event payload (turns + cost from the SDK). For in-flight\nruns those fields are null; the UI shows a \"running\" pill instead.",
+        "properties": {
+          "duration_ms": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Duration Ms"
+          },
+          "ended_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ended At"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error"
+          },
+          "id": {
+            "title": "Id",
+            "type": "integer"
+          },
+          "kind": {
+            "title": "Kind",
+            "type": "string"
+          },
+          "num_turns": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Num Turns"
+          },
+          "repo_name": {
+            "title": "Repo Name",
+            "type": "string"
+          },
+          "started_at": {
+            "format": "date-time",
+            "title": "Started At",
+            "type": "string"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          },
+          "ticket_external_id": {
+            "title": "Ticket External Id",
+            "type": "string"
+          },
+          "ticket_id": {
+            "title": "Ticket Id",
+            "type": "integer"
+          },
+          "ticket_title": {
+            "title": "Ticket Title",
+            "type": "string"
+          },
+          "total_cost_usd": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Total Cost Usd"
+          }
+        },
+        "required": [
+          "id",
+          "ticket_id",
+          "ticket_external_id",
+          "ticket_title",
+          "repo_name",
+          "kind",
+          "status",
+          "started_at",
+          "ended_at",
+          "error",
+          "num_turns",
+          "duration_ms",
+          "total_cost_usd"
+        ],
+        "title": "RunOut",
+        "type": "object"
+      },
+      "StackOut": {
+        "properties": {
+          "additional_skills": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Additional Skills",
+            "type": "array"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "slug": {
+            "title": "Slug",
+            "type": "string"
+          }
+        },
+        "required": [
+          "slug",
+          "name"
+        ],
+        "title": "StackOut",
+        "type": "object"
+      },
+      "StackSpendOut": {
+        "properties": {
+          "run_count": {
+            "title": "Run Count",
+            "type": "integer"
+          },
+          "spent_usd": {
+            "title": "Spent Usd",
+            "type": "number"
+          },
+          "stack": {
+            "title": "Stack",
+            "type": "string"
+          },
+          "ticket_count": {
+            "title": "Ticket Count",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "stack",
+          "spent_usd",
+          "run_count",
+          "ticket_count"
+        ],
+        "title": "StackSpendOut",
+        "type": "object"
+      },
+      "TicketBudgetUpdate": {
+        "description": "PATCH body for `/api/tickets/{external_id}/budget`.\n\nPass null to clear (revert to inheritance). Cannot be negative.",
+        "properties": {
+          "cost_ceiling_usd": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cost Ceiling Usd"
+          }
+        },
+        "required": [
+          "cost_ceiling_usd"
+        ],
+        "title": "TicketBudgetUpdate",
+        "type": "object"
+      },
+      "TicketOut": {
+        "properties": {
+          "body": {
+            "title": "Body",
+            "type": "string"
+          },
+          "child_count": {
+            "default": 0,
+            "title": "Child Count",
+            "type": "integer"
+          },
+          "cost_ceiling_usd": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cost Ceiling Usd"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "domain_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Domain Name"
+          },
+          "external_id": {
+            "title": "External Id",
+            "type": "string"
+          },
+          "github_issue_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Github Issue Url"
+          },
+          "id": {
+            "title": "Id",
+            "type": "integer"
+          },
+          "kind": {
+            "title": "Kind",
+            "type": "string"
+          },
+          "parent_external_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Parent External Id"
+          },
+          "persona": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Persona"
+          },
+          "pr_number": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pr Number"
+          },
+          "pr_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pr Url"
+          },
+          "repo": {
+            "$ref": "#/components/schemas/RepoOut"
+          },
+          "stack": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Stack"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          },
+          "title": {
+            "title": "Title",
+            "type": "string"
+          },
+          "updated_at": {
+            "format": "date-time",
+            "title": "Updated At",
+            "type": "string"
+          },
+          "workflow_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Workflow Id"
+          }
+        },
+        "required": [
+          "id",
+          "external_id",
+          "title",
+          "body",
+          "domain_name",
+          "status",
+          "workflow_id",
+          "repo",
+          "kind",
+          "parent_external_id",
+          "created_at",
+          "updated_at"
+        ],
+        "title": "TicketOut",
+        "type": "object"
+      },
+      "ValidationError": {
+        "properties": {
+          "ctx": {
+            "title": "Context",
+            "type": "object"
+          },
+          "input": {
+            "title": "Input"
+          },
+          "loc": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer"
+                }
+              ]
+            },
+            "title": "Location",
+            "type": "array"
+          },
+          "msg": {
+            "title": "Message",
+            "type": "string"
+          },
+          "type": {
+            "title": "Error Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "loc",
+          "msg",
+          "type"
+        ],
+        "title": "ValidationError",
+        "type": "object"
+      }
+    }
+  },
+  "info": {
+    "title": "pravi",
+    "version": "0.1.0"
+  },
+  "openapi": "3.1.0",
+  "paths": {
+    "/api/auth/github/callback": {
+      "get": {
+        "description": "Token-exchange endpoint. GitHub redirects here with `code` + `state`.\n\nOn success we redirect back to the configured `github_oauth_success_redirect`\nso the user lands on the app, not a JSON blob. Errors land on the same\nURL with `?github_auth_error=...` so the UI can surface a toast.",
+        "operationId": "callback_api_auth_github_callback_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Callback"
+      }
+    },
+    "/api/auth/github/login": {
+      "get": {
+        "description": "Kick the OAuth flow. Browser-driven (returns a 302).\n\nThe UI hits this via `window.location.href = \"/api/auth/github/login\"`\nrather than fetch() \u2014 we want the browser to follow the redirect.",
+        "operationId": "login_api_auth_github_login_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Login"
+      }
+    },
+    "/api/auth/github/logout": {
+      "post": {
+        "description": "Revoke the active connection (soft-delete; row stays for audit).",
+        "operationId": "logout_api_auth_github_logout_post",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Logout Api Auth Github Logout Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Logout"
+      }
+    },
+    "/api/auth/github/me": {
+      "get": {
+        "description": "Return the active GitHub connection, or null if not connected.",
+        "operationId": "me_api_auth_github_me_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/GitHubConnectionOut"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "title": "Response Me Api Auth Github Me Get"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Me"
+      }
+    },
+    "/api/auth/github/repos/search": {
+      "get": {
+        "description": "Search GitHub repos accessible to the active OAuth connection.\n\nUsed by the new-ticket form to let the user pick a repo without typing\na local path. Empty `q` returns the most-recently-pushed repos.",
+        "operationId": "search_repos_api_auth_github_repos_search_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "q",
+            "required": false,
+            "schema": {
+              "default": "",
+              "title": "Q",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/GitHubRepoOut"
+                  },
+                  "title": "Response Search Repos Api Auth Github Repos Search Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Search Repos"
+      }
+    },
+    "/api/auth/github/repos/{owner}/{name}/issues": {
+      "get": {
+        "description": "List issues on a connected GitHub repo. PRs are filtered out.\n\nUsed by the /issues page to scan + import as pravi tickets. `state` is\n\"open\" | \"closed\" | \"all\"; `labels` is comma-separated.",
+        "operationId": "list_repo_issues_api_auth_github_repos__owner___name__issues_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "owner",
+            "required": true,
+            "schema": {
+              "title": "Owner",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "name",
+            "required": true,
+            "schema": {
+              "title": "Name",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "state",
+            "required": false,
+            "schema": {
+              "default": "open",
+              "title": "State",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "labels",
+            "required": false,
+            "schema": {
+              "default": "",
+              "title": "Labels",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/GitHubIssueOut"
+                  },
+                  "title": "Response List Repo Issues Api Auth Github Repos  Owner   Name  Issues Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Repo Issues"
+      }
+    },
+    "/api/personas": {
+      "get": {
+        "description": "The full persona catalog (active + coming_soon) \u2014 drives the\nPersonaPicker. UI greys out coming_soon entries. See ADR 0004.",
+        "operationId": "list_personas_api_personas_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/PersonaOut"
+                  },
+                  "title": "Response List Personas Api Personas Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "List Personas"
+      }
+    },
+    "/api/repos/_/domains": {
+      "get": {
+        "description": "Domain list for a repo we may or may not have a ticket for yet \u2014\nused by the create-ticket form to populate the domain dropdown.",
+        "operationId": "list_domains_for_path_api_repos___domains_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "repo_path",
+            "required": true,
+            "schema": {
+              "title": "Repo Path",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "domains_file",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Domains File"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/DomainOut"
+                  },
+                  "title": "Response List Domains For Path Api Repos   Domains Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Domains For Path"
+      }
+    },
+    "/api/runs": {
+      "get": {
+        "description": "Most-recent agent runs across all tickets \u2014 powers the /runs dashboard.\n\nJoins Run \u2192 Ticket \u2192 Repo and left-joins the matching `run_finished`\nevent to pull final cost/turns/duration from its payload. In-flight runs\nhave null metrics; the UI shows a \"running\" pill instead.",
+        "operationId": "list_runs_api_runs_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 100,
+              "title": "Limit",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/RunOut"
+                  },
+                  "title": "Response List Runs Api Runs Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Runs"
+      }
+    },
+    "/api/spend/by-persona": {
+      "get": {
+        "description": "Sum of dev-run cost grouped by ticket persona.\n\nDrives the per-persona FinOps widget on the dashboard. NULL persona\non a ticket aggregates under `other`. `window` accepts `7d`, `30d`,\nor `all` (default all-time). Optional `repo_id` scopes to one repo.",
+        "operationId": "spend_by_persona_api_spend_by_persona_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "window",
+            "required": false,
+            "schema": {
+              "default": "all",
+              "title": "Window",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "repo_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Repo Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/PersonaSpendOut"
+                  },
+                  "title": "Response Spend By Persona Api Spend By Persona Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Spend By Persona"
+      }
+    },
+    "/api/spend/by-stack": {
+      "get": {
+        "description": "Sum of dev-run cost grouped by ticket stack. Same shape as\n`/spend/by-persona`; NULL stack aggregates under `unknown`.",
+        "operationId": "spend_by_stack_api_spend_by_stack_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "window",
+            "required": false,
+            "schema": {
+              "default": "all",
+              "title": "Window",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "repo_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Repo Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/StackSpendOut"
+                  },
+                  "title": "Response Spend By Stack Api Spend By Stack Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Spend By Stack"
+      }
+    },
+    "/api/stacks": {
+      "get": {
+        "description": "Known stack slugs. Open-set \u2014 the decompose architect can mint\nnew ones; unknown slugs resolve to `unknown` at the dev-prompt step.",
+        "operationId": "list_stacks_api_stacks_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/StackOut"
+                  },
+                  "title": "Response List Stacks Api Stacks Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "List Stacks"
+      }
+    },
+    "/api/tickets": {
+      "get": {
+        "description": "List tickets, most-recently-updated first.\n\nFilters:\n  - `?status=planning` \u2014 only those waiting for a human-approved plan.\n  - `?kind=epic|feature|task` \u2014 single layer of the hierarchy.\n  - `?parent_external_id=ABC-99` \u2014 children of a specific ticket.",
+        "operationId": "list_tickets_api_tickets_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "status",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Status"
+            }
+          },
+          {
+            "in": "query",
+            "name": "kind",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Kind"
+            }
+          },
+          {
+            "in": "query",
+            "name": "parent_external_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Parent External Id"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 100,
+              "title": "Limit",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/TicketOut"
+                  },
+                  "title": "Response List Tickets Api Tickets Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Tickets"
+      },
+      "post": {
+        "description": "Create (or upsert) a Ticket row.\n\nFor kind=task, also launches a FeatureWorkflow (workflow lands in\n`waiting_for_plan`). For kind=epic / kind=feature, just stores the row \u2014\nthose are organizational containers; epic auto-decomposition is a\nseparate workflow type planned for a follow-up slice.\n\nHierarchy + inheritance:\n  - parent_external_id can be set to put this ticket under another.\n  - Hierarchy rules are: epic \u2192 feature \u2192 task. Mismatches \u2192 400.\n  - If a parent is given, repo / domain are inherited unless overridden.",
+        "operationId": "create_ticket_api_tickets_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateTicketRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CreateTicketResult"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Create Ticket"
+      }
+    },
+    "/api/tickets/bulk-delete": {
+      "post": {
+        "description": "Delete multiple tickets atomically (each plus its subtree).\n\nIf the selection includes both an epic and one of its descendants,\nthe descendant is dropped from the work list (it'd be cascade-deleted\nby the epic anyway). Result reports both what was processed and any\nrequested IDs that didn't resolve.",
+        "operationId": "bulk_delete_tickets_api_tickets_bulk_delete_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BulkDeleteRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BulkDeleteResult"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Bulk Delete Tickets"
+      }
+    },
+    "/api/tickets/{external_id}": {
+      "delete": {
+        "description": "Delete a ticket plus its full descendant subtree. Hard-delete.",
+        "operationId": "delete_ticket_api_tickets__external_id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "external_id",
+            "required": true,
+            "schema": {
+              "title": "External Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Delete Ticket Api Tickets  External Id  Delete",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Delete Ticket"
+      },
+      "get": {
+        "operationId": "get_ticket_api_tickets__external_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "external_id",
+            "required": true,
+            "schema": {
+              "title": "External Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TicketOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Ticket"
+      }
+    },
+    "/api/tickets/{external_id}/budget": {
+      "patch": {
+        "description": "Set or clear the per-ticket cost ceiling. Null = revert to inheritance.",
+        "operationId": "update_ticket_budget_api_tickets__external_id__budget_patch",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "external_id",
+            "required": true,
+            "schema": {
+              "title": "External Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TicketBudgetUpdate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TicketOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Update Ticket Budget"
+      }
+    },
+    "/api/tickets/{external_id}/cancel": {
+      "post": {
+        "operationId": "cancel_api_tickets__external_id__cancel_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "external_id",
+            "required": true,
+            "schema": {
+              "title": "External Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Cancel Api Tickets  External Id  Cancel Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Cancel"
+      }
+    },
+    "/api/tickets/{external_id}/children": {
+      "get": {
+        "description": "Direct children of a ticket (epic \u2192 features, feature \u2192 tasks).",
+        "operationId": "list_children_api_tickets__external_id__children_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "external_id",
+            "required": true,
+            "schema": {
+              "title": "External Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/TicketOut"
+                  },
+                  "title": "Response List Children Api Tickets  External Id  Children Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Children"
+      }
+    },
+    "/api/tickets/{external_id}/clarification": {
+      "get": {
+        "description": "The latest persisted clarification for this epic, if any.\n\nReturns null if no clarification has been kicked off (e.g. an epic\ncreated before auto-clarify was wired in). UI polls this while\n`status == \"running\"` to see questions stream in.",
+        "operationId": "get_clarification_api_tickets__external_id__clarification_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "external_id",
+            "required": true,
+            "schema": {
+              "title": "External Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/PersistedClarificationOut"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "title": "Response Get Clarification Api Tickets  External Id  Clarification Get"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Clarification"
+      },
+      "post": {
+        "description": "Kick off a new clarification for this epic (replacing the visible one).\n\nUsed by the \"re-clarify\" button on the epic page when the user wants\nfresh questions. The previous clarification rows stay in the DB for\naudit but only the latest is shown.",
+        "operationId": "kick_clarification_api_tickets__external_id__clarification_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "external_id",
+            "required": true,
+            "schema": {
+              "title": "External Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PersistedClarificationOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Kick Clarification"
+      }
+    },
+    "/api/tickets/{external_id}/clarify": {
+      "post": {
+        "description": "Run the architect in 'clarify' mode \u2014 ask 2\u20135 targeted questions about\nan epic before decomposing. Cheap (~$0.02\u20130.10), short.\n\nReturns an empty `questions` list if the architect thinks nothing's worth\nasking. The UI should let the user proceed directly to decomposition in\nthat case.",
+        "operationId": "clarify_api_tickets__external_id__clarify_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "external_id",
+            "required": true,
+            "schema": {
+              "title": "External Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClarifyDraftOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Clarify"
+      }
+    },
+    "/api/tickets/{external_id}/clarify/stream": {
+      "get": {
+        "description": "SSE: streams architect text chunks live during a clarify call, then\nemits a final `done` event with the parsed structured questions.\n\nSame inputs as `POST /clarify`; same final payload shape (`ClarifyDraftOut`),\njust delivered progressively. The UI can show questions as the architect\ntypes instead of waiting for the full response.\n\nEvents:\n  - `text`  { delta: string }       \u2014 incremental chunk of raw markdown\n  - `done`  ClarifyDraftOut         \u2014 final parsed result; stream closes\n  - `error` { detail: string }      \u2014 fatal; stream closes",
+        "operationId": "clarify_stream_api_tickets__external_id__clarify_stream_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "external_id",
+            "required": true,
+            "schema": {
+              "title": "External Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Clarify Stream"
+      }
+    },
+    "/api/tickets/{external_id}/cost-rollup": {
+      "get": {
+        "description": "Full budget picture for one ticket \u2014 own ceiling/spend + each ancestor.\n\nPowers the <BudgetMeter> on the ticket page. Computed at query time\n(no caching) \u2014 fine because rollups touch at most a few dozen events\nper ticket subtree.",
+        "operationId": "get_cost_rollup_api_tickets__external_id__cost_rollup_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "external_id",
+            "required": true,
+            "schema": {
+              "title": "External Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CostRollupOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Cost Rollup"
+      }
+    },
+    "/api/tickets/{external_id}/decompose-draft": {
+      "get": {
+        "description": "Latest decompose draft for this epic (poll target). Null = never run.",
+        "operationId": "get_decompose_draft_api_tickets__external_id__decompose_draft_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "external_id",
+            "required": true,
+            "schema": {
+              "title": "External Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/AgentDraftOut"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "title": "Response Get Decompose Draft Api Tickets  External Id  Decompose Draft Get"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Decompose Draft"
+      }
+    },
+    "/api/tickets/{external_id}/decompose/approve": {
+      "post": {
+        "description": "Materialize feature + task rows from the user-approved YAML.\n\nLazy: workflows are NOT started for the new tasks. Each task waits for\nthe user to click \"start workflow\" on its page. This avoids a flood of\nconcurrent waiting_for_plan workflows for big epics.",
+        "operationId": "decompose_approve_api_tickets__external_id__decompose_approve_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "external_id",
+            "required": true,
+            "schema": {
+              "title": "External Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DecomposeApproveRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DecomposeApproveOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Decompose Approve"
+      }
+    },
+    "/api/tickets/{external_id}/decompose/draft": {
+      "post": {
+        "description": "Kick off a backgrounded decompose draft.\n\nReturns the persisted draft row immediately (status=pending or running).\nThe UI polls GET /tickets/{id}/decompose-draft for progress; closing the\ntab or navigating away does not interrupt the architect.",
+        "operationId": "decompose_draft_api_tickets__external_id__decompose_draft_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "external_id",
+            "required": true,
+            "schema": {
+              "title": "External Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/DecomposeDraftRequest"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Body"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentDraftOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Decompose Draft"
+      }
+    },
+    "/api/tickets/{external_id}/dependencies": {
+      "post": {
+        "description": "Make `external_id` depend on `req.prerequisite_external_id`. Both\nmust be features under the same epic. Cycles are rejected.",
+        "operationId": "add_dependency_api_tickets__external_id__dependencies_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "external_id",
+            "required": true,
+            "schema": {
+              "title": "External Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AddDependencyRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Add Dependency Api Tickets  External Id  Dependencies Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Add Dependency"
+      }
+    },
+    "/api/tickets/{external_id}/dependencies/{prereq_external_id}": {
+      "delete": {
+        "description": "Remove the edge `external_id` \u2192 `prereq_external_id`.",
+        "operationId": "delete_dependency_api_tickets__external_id__dependencies__prereq_external_id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "external_id",
+            "required": true,
+            "schema": {
+              "title": "External Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "prereq_external_id",
+            "required": true,
+            "schema": {
+              "title": "Prereq External Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Delete Dependency"
+      }
+    },
+    "/api/tickets/{external_id}/domains": {
+      "get": {
+        "operationId": "list_domains_for_ticket_api_tickets__external_id__domains_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "external_id",
+            "required": true,
+            "schema": {
+              "title": "External Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "domains_file",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Domains File"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/DomainOut"
+                  },
+                  "title": "Response List Domains For Ticket Api Tickets  External Id  Domains Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Domains For Ticket"
+      }
+    },
+    "/api/tickets/{external_id}/plan-draft": {
+      "get": {
+        "description": "Latest plan draft for this ticket (poll target). Null = never run.",
+        "operationId": "get_plan_draft_api_tickets__external_id__plan_draft_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "external_id",
+            "required": true,
+            "schema": {
+              "title": "External Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/AgentDraftOut"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "title": "Response Get Plan Draft Api Tickets  External Id  Plan Draft Get"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Plan Draft"
+      }
+    },
+    "/api/tickets/{external_id}/plan/approve": {
+      "post": {
+        "description": "Persist a Plan row and signal the waiting FeatureWorkflow.",
+        "operationId": "approve_api_tickets__external_id__plan_approve_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "external_id",
+            "required": true,
+            "schema": {
+              "title": "External Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PlanApproveRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PlanApproveOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Approve"
+      }
+    },
+    "/api/tickets/{external_id}/plan/draft": {
+      "post": {
+        "description": "Kick off a backgrounded plan draft for a task ticket.\n\nSame pattern as decompose: returns the persisted draft row immediately;\nthe UI polls GET /tickets/{id}/plan-draft. Survives tab close.",
+        "operationId": "draft_api_tickets__external_id__plan_draft_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "external_id",
+            "required": true,
+            "schema": {
+              "title": "External Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PlanDraftRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentDraftOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Draft"
+      }
+    },
+    "/api/tickets/{external_id}/roadmap": {
+      "get": {
+        "description": "Topological view of an epic's features.\n\nWave 0 = no prerequisites. Wave N = prereqs are all in waves < N.\nFeatures in the same wave can be worked on in parallel.",
+        "operationId": "get_roadmap_api_tickets__external_id__roadmap_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "external_id",
+            "required": true,
+            "schema": {
+              "title": "External Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RoadmapOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Roadmap"
+      }
+    },
+    "/api/tickets/{external_id}/run/stream": {
+      "get": {
+        "description": "SSE: live timeline of the most recent dev agent run.\n\nReplays existing events for the latest Run row, then streams new events\nas they arrive via Postgres LISTEN/NOTIFY. Closes when a `run_finished`\nsentinel event is seen.\n\nA client reconnecting mid-run gets a full replay first, so refreshing\nthe page never blanks out. If no run has started yet, the stream stays\nopen and waits \u2014 the first event will arrive when dev_activity boots.",
+        "operationId": "run_stream_api_tickets__external_id__run_stream_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "external_id",
+            "required": true,
+            "schema": {
+              "title": "External Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Run Stream"
+      }
+    },
+    "/api/tickets/{external_id}/start-workflow": {
+      "post": {
+        "description": "Launch a FeatureWorkflow for an existing task ticket.\n\nUsed by tasks materialized through epic decomposition \u2014 they exist in\nthe DB but haven't kicked off their workflow yet. Idempotent against the\nALLOW_DUPLICATE_FAILED_ONLY reuse policy.",
+        "operationId": "start_workflow_api_tickets__external_id__start_workflow_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "external_id",
+            "required": true,
+            "schema": {
+              "title": "External Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "base_ref",
+            "required": false,
+            "schema": {
+              "default": "main",
+              "title": "Base Ref",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CreateTicketResult"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Start Workflow"
+      }
+    },
+    "/api/tickets/{external_id}/status/stream": {
+      "get": {
+        "description": "SSE: emits a WorkflowStatusEvent each time the workflow's status changes,\nand closes once the workflow reaches a terminal state.",
+        "operationId": "status_stream_api_tickets__external_id__status_stream_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "external_id",
+            "required": true,
+            "schema": {
+              "title": "External Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Status Stream"
+      }
+    },
+    "/healthz": {
+      "get": {
+        "operationId": "healthz_healthz_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": {
+                    "type": "string"
+                  },
+                  "title": "Response Healthz Healthz Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Healthz"
+      }
+    }
+  }
+}

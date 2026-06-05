@@ -51,6 +51,37 @@ Principles:
   source issue for traceability.
 - On a successful dev run, pravi pushes the branch and opens a **draft PR**.
 
+**Personas and stacks** (two-axis specialization)
+- Each task carries a **persona** (`architect`, `frontend`, `backend`, `tester`,
+  `tech_writer`, `other`) and a **stack** slug (`python-fastapi`,
+  `typescript-react`, `go-stdlib`, …). The decompose architect assigns both at
+  task-creation time; the dev agent's system prompt is conditioned on the pair.
+- Persona catalog in `src/pravi/personas/catalog.py` — active personas declare a
+  `system_prompt_modifier` (e.g. the tester is forbidden from editing source
+  outside `tests/`); a further 13 personas are listed as `coming_soon` for the
+  roadmap UI and fall back to the generic prompt.
+- Stack catalog in `src/pravi/personas/stacks.py` is open-set — known stacks
+  contribute `additional_skills` hints on top of persona baselines; unknown
+  slugs resolve to `unknown` and no hints are loaded.
+
+**Sandbox seam**
+- The dev agent's working directory is provisioned through a `Sandbox` Protocol
+  (`src/pravi/agents/sandbox/`) so the workflow never touches paths directly.
+  Today's only implementation is `LocalWorktreeSandbox` — lazy clone into
+  `clone_base/<owner>__<name>`, `git worktree add` per ticket — but the seam
+  is the integration point for future Docker / Cloudflare / remote backends,
+  selected via `PRAVI_SANDBOX_BACKEND`. See
+  [ADR 0003](docs/adr/0003-sandbox-seam-no-local-mounts.md).
+
+**Spend tracking by persona / stack**
+- `src/pravi/budget/by_persona.py` aggregates `run_finished` event cost grouped
+  by the task ticket's persona or stack — NULL persona rolls up under `other`,
+  NULL stack under `unknown`. Windowed (`7d`, `30d`, `all`) and optionally
+  scoped to one repo.
+- Surfaced as `GET /api/spend/by-persona` and `GET /api/spend/by-stack`
+  (params: `window`, `repo_id`) for the dashboard's "what's burning the
+  budget" view.
+
 **Web UI** (React + Vite + Tailwind)
 - Home dashboard with persisted view state (kind filter / sort / search).
 - Markdown plan editor with live preview; approve/cancel buttons signal the
@@ -74,6 +105,16 @@ Principles:
 > backends, "is Temporal overkill?", "why not LangGraph?") are written up
 > as ADRs in [docs/adr/](docs/adr/) with honest tradeoffs and the
 > "revisit when…" triggers that would push us to change course.
+
+## Documentation
+
+- **[User guide](docs/user-guide/README.md)** — index of the four guides for
+  bringing pravi to your own repo: `.builder/domains.yaml`, GitHub OAuth,
+  the persona/stack catalog, and budget ceilings + spend views.
+- **[Architecture decision records](docs/adr/README.md)** — the "why" behind
+  Temporal, the LLM-agnostic architect, sandbox seams, personas, and no-RAG.
+- **[LLM shakedown notes](docs/llm-shakedown.md)** — empirical notes from
+  exercising the architect/dev loop against real repos.
 
 ## Quickstart
 
@@ -176,6 +217,19 @@ Per-run hard limits (wall clock, turns, $ budget) for the dev agent come from
 
 Epics and features are organizational containers (no workflow runs); their
 tasks each boot a `FeatureWorkflow` lazily when you start them.
+
+**Failure classifications.** When a dev run terminates unsuccessfully,
+`_classify_failure` in `src/pravi/activities/dev_activity.py` tags it with a
+stable reason code so the UI can render a remediation hint instead of a raw
+stack trace:
+
+- `quota_exhausted` — Anthropic rate limit / Max-plan quota hit.
+- `wall_timeout` — exceeded `PRAVI_DEV_MAX_WALL_SECONDS`.
+- `budget_exhausted` — cost ceiling tripped, either pre-flight (no tokens
+  spent) or mid-run; the `Run` row is stamped with `RunStatus.budget_exhausted`.
+- `max_turns_exhausted` — hit the SDK's `max_turns` cap.
+- `sdk_error` — anything else thrown by claude-agent-sdk.
+- `unknown` — failure with no error payload to read.
 
 ## Temporal organization
 
