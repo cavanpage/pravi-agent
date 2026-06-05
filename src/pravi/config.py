@@ -110,6 +110,23 @@ class Settings(BaseSettings):
     # if you want PRs opened as draft and promoted manually later.
     pr_open_as_draft: bool = False
 
+    # ---- Cloudflare (optional — for "new repo + Pages deploy" flow) ----
+    # Get an API token at https://dash.cloudflare.com/profile/api-tokens.
+    # Needs `Account → Cloudflare Pages → Edit` for the target account.
+    # Account ID is on the right side of your Cloudflare dashboard's
+    # account home page.
+    #
+    # Setting both unlocks the "deploy to Cloudflare Pages" toggle on
+    # the create-repo modal. Leaving them unset is fine — the repo
+    # still gets created on GitHub, just without the Pages link.
+    #
+    # ONE-TIME SETUP: the user must also authorize Cloudflare's GitHub
+    # app on the account that owns the repo (Cloudflare dashboard →
+    # Workers & Pages → Connect to Git). This is a browser flow we
+    # can't do from the server side.
+    cloudflare_api_token: str | None = None
+    cloudflare_account_id: str | None = None
+
     @property
     def worktree_base_resolved(self) -> Path:
         return self.worktree_base.expanduser().resolve()

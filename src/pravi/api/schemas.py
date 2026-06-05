@@ -415,6 +415,70 @@ class GitHubIssueRef(BaseModel):
     html_url: str | None = None
 
 
+class CreateRepoRequest(BaseModel):
+    """Body for `POST /api/auth/github/repos/new`."""
+
+    name: str
+    description: str = ""
+    private: bool = True
+    template: str = "vite-react-static"
+    # Whether to also create a Cloudflare Pages project linked to this
+    # repo (auto-deploys every push). Falls through to "skipped" if
+    # Cloudflare creds aren't configured.
+    deploy_to_cloudflare_pages: bool = False
+    # If True, also auto-clone the new repo locally + register it in
+    # pravi's Repo table so it's immediately usable as a ticket target.
+    register_in_pravi: bool = True
+
+
+class CreateRepoResult(BaseModel):
+    """Outcome of a new-repo create. Surfaces what happened on each leg
+    so the UI can render success / partial-success / what-to-do-next."""
+
+    repo: GitHubRepoOut
+    initial_commit_pushed: bool
+    pages: PagesProjectOut | None = None
+    pages_skipped_reason: str | None = None
+    pravi_repo_id: int | None = None
+
+
+class PagesProjectOut(BaseModel):
+    name: str
+    subdomain: str
+    pages_url: str
+    canonical_url: str | None = None
+
+
+class CloudflareAccountOut(BaseModel):
+    """One account row from the `/accounts` probe. Returned to the UI
+    when the pasted token can see multiple accounts so the user picks."""
+
+    id: str
+    name: str
+
+
+class CloudflareConnectRequest(BaseModel):
+    """Body for `POST /api/auth/cloudflare/connect`.
+
+    `account_id` is optional — if the token is scoped to a single
+    account, the server auto-picks it. If the token can see multiple
+    and `account_id` is missing, the endpoint returns 409 with the
+    candidate list so the UI can render an account picker."""
+
+    api_token: str
+    account_id: str | None = None
+
+
+class CloudflareConnectionOut(BaseModel):
+    """Current Cloudflare connection state. Mirrors `GitHubConnectionOut`."""
+
+    id: int
+    account_id: str
+    account_name: str | None
+    token_id: str | None
+    created_at: datetime
+
+
 class GitHubRepoOut(BaseModel):
     """One repo from `/api/auth/github/repos/search`.
 

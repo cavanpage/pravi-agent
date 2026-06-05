@@ -169,6 +169,34 @@ class GitHubConnection(Base, TimestampMixin):
     )
 
 
+class CloudflareConnection(Base, TimestampMixin):
+    """Persisted Cloudflare API token + account binding.
+
+    Modelled after [[GitHubConnection]] — single-row-active, soft-delete
+    on disconnect. The token is whatever the user pasted into the
+    "Connect Cloudflare" modal; the account_id is resolved from the
+    `/accounts` probe at connect time so the user doesn't have to look
+    it up themselves.
+    """
+
+    __tablename__ = "cloudflare_connections"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    api_token: Mapped[str] = mapped_column(Text, nullable=False)
+    account_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    account_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    # Cloudflare assigns each token an id we can show in the UI for a
+    # "which token is this" hint without leaking the secret.
+    token_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    revoked_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
+    __table_args__ = (
+        Index("ix_cloudflare_connections_revoked_at_id", "revoked_at", "id"),
+    )
+
+
 class ClarifyStatus(StrEnum):
     pending = "pending"
     running = "running"

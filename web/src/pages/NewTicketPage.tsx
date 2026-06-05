@@ -4,6 +4,7 @@ import { useMutation, useQuery } from "@tanstack/react-query";
 
 import { api, GitHubRepoRef, GitHubRepoResult, TicketKind } from "../lib/api";
 import { PersonaPicker } from "../components/PersonaPicker";
+import { CreateRepoModal } from "../components/CreateRepoModal";
 
 // Kind-specific guidance so the form makes sense for epics + features too.
 const KIND_LABELS: Record<TicketKind, string> = {
@@ -41,6 +42,7 @@ export function NewTicketPage() {
   // coordinates here. The sandbox provisions a working dir lazily on the
   // first dev run (see ADR 0003).
   const [githubRepo, setGithubRepo] = useState<GitHubRepoResult | null>(null);
+  const [showCreateRepo, setShowCreateRepo] = useState(false);
   const [domainName, setDomainName] = useState("");
   const [baseRef, setBaseRef] = useState("main");
   // Persona + stack (ADR 0004). null = unassigned / generic.
@@ -345,6 +347,7 @@ export function NewTicketPage() {
               isLoading={ghReposQ.isFetching}
               error={(ghReposQ.error as Error | null)?.message ?? null}
               onPick={(r) => setGithubRepo(r)}
+              onCreateNew={() => setShowCreateRepo(true)}
             />
           ) : (
             <div className="rounded-xl border border-amber-400/20 bg-amber-400/[0.04] px-3.5 py-2.5 text-sm text-amber-200">
@@ -488,6 +491,16 @@ export function NewTicketPage() {
           </Link>
         </div>
       </form>
+
+      {showCreateRepo ? (
+        <CreateRepoModal
+          onClose={() => setShowCreateRepo(false)}
+          onPicked={(r) => {
+            setGithubRepo(r);
+            setShowCreateRepo(false);
+          }}
+        />
+      ) : null}
     </div>
   );
 }
@@ -576,6 +589,7 @@ function GitHubRepoPicker({
   isLoading,
   error,
   onPick,
+  onCreateNew,
 }: {
   query: string;
   onQueryChange: (q: string) => void;
@@ -583,6 +597,7 @@ function GitHubRepoPicker({
   isLoading: boolean;
   error: string | null;
   onPick: (r: GitHubRepoResult) => void;
+  onCreateNew: () => void;
 }) {
   return (
     <div className="rounded-xl border border-white/10 bg-white/[0.02] overflow-hidden">
@@ -612,6 +627,18 @@ function GitHubRepoPicker({
         {isLoading ? (
           <span className="text-[11px] text-neutral-500">searching…</span>
         ) : null}
+        <button
+          type="button"
+          onClick={(e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            onCreateNew();
+          }}
+          className="text-[11px] px-2 py-1 rounded-full bg-emerald-500/15 hover:bg-emerald-500/25 text-emerald-200 border border-emerald-400/30 transition shrink-0"
+          title="Scaffold a new repo from a template — auto-deploys to Cloudflare Pages if configured"
+        >
+          + new repo
+        </button>
       </div>
       {error ? (
         <div className="px-3 py-2 text-xs text-rose-300">{error}</div>

@@ -206,6 +206,117 @@ def _to_active(row: GitHubConnection) -> ActiveConnection:
 # ---- REST helpers ---------------------------------------------------------
 
 
+async def create_repo(
+    access_token: str,
+    *,
+    name: str,
+    description: str = "",
+    private: bool = True,
+    auto_init: bool = False,
+) -> dict[str, Any]:
+    """Create a new repo under the authenticated user.
+
+    Calls `POST /user/repos`. Returns the GitHub repo payload. With
+    `auto_init=False` (default) the repo lands EMPTY — no commits, no
+    default branch, no README. That's intentional: the create-new-repo
+    flow follows up by pushing a real initial commit with the chosen
+    template. An auto_init'd `README.md` would show up as a separate
+    commit + force a merge dance.
+    """
+    headers = {
+        "Authorization": f"Bearer {access_token}",
+        "Accept": "application/vnd.github+json",
+        "X-GitHub-Api-Version": "2022-11-28",
+    }
+    payload = {
+        "name": name,
+        "description": description,
+        "private": private,
+        "auto_init": auto_init,
+    }
+    async with httpx.AsyncClient(timeout=15.0) as client:
+        r = await client.post(
+            "https://api.github.com/user/repos",
+            headers=headers,
+            json=payload,
+        )
+    if r.status_code == 422:
+        # 422 from this endpoint is almost always "name already exists".
+        # Re-shape the error so the API can return a useful 409.
+        raise RuntimeError(f"github create_repo conflict: {r.text[:300]}")
+    if r.status_code >= 400:
+        raise RuntimeError(
+            f"github create_repo {r.status_code}: {r.text[:300]}"
+        )
+    return r.json()
+
+
+async def push_initial_commit(
+    access_token: str,
+    *,
+    owner: str,
+    name: str,
+    default_branch: str,
+    files: dict[str, str],
+    commit_message: str = "chore: scaffold from pravi template",
+    author_name: str = "pravi-agent",
+    author_email: str = "pravi-agent@users.noreply.github.com",
+) -> None:
+    """Push `files` as the initial commit on a freshly-created (empty)
+    repo. Uses a local temp git checkout — simpler + faster than the
+    REST trees-API dance and reuses git semantics we already trust.
+
+    Token is injected at push time only; the saved remote afterwards is
+    a clean HTTPS URL (no secrets at rest).
+    """
+    import asyncio as _asyncio
+    import shutil as _shutil
+    import tempfile as _tempfile
+
+    workdir = _tempfile.mkdtemp(prefix=f"pravi-init-{name}-")
+    try:
+        # Materialize files
+        for rel_path, content in files.items():
+            dst = Path(workdir) / rel_path
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            dst.write_text(content)
+
+        async def _run(*args: str) -> None:
+            proc = await _asyncio.create_subprocess_exec(
+                *args,
+                cwd=workdir,
+                stdout=_asyncio.subprocess.PIPE,
+                stderr=_asyncio.subprocess.PIPE,
+            )
+            _out, err = await proc.communicate()
+            if proc.returncode != 0:
+                # Scrub token before raising.
+                msg = err.decode(errors="replace").replace(access_token, "<redacted>")
+                raise RuntimeError(
+                    f"{' '.join(args[:2])} failed ({proc.returncode}): {msg[:300]}"
+                )
+
+        # Branch name on `git init` defaults to whatever the user's
+        # gitconfig says (usually `main`). Force it explicitly so we
+        # match what we just asked GitHub to use as the default branch.
+        await _run("git", "init", "-q", "-b", default_branch)
+        await _run("git", "config", "user.email", author_email)
+        await _run("git", "config", "user.name", author_name)
+        await _run("git", "add", ".")
+        await _run("git", "commit", "-q", "-m", commit_message)
+        token_url = (
+            f"https://x-access-token:{access_token}@github.com/{owner}/{name}.git"
+        )
+        await _run("git", "remote", "add", "origin", token_url)
+        await _run("git", "push", "-q", "-u", "origin", default_branch)
+        log.info(
+            "github.initial_commit_pushed", owner=owner, name=name,
+            branch=default_branch, file_count=len(files),
+        )
+    finally:
+        _shutil.rmtree(workdir, ignore_errors=True)
+
+
 async def search_user_repos(
     access_token: str, *, query: str = "", per_page: int = 25
 ) -> list[dict[str, Any]]:

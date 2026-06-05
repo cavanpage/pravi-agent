@@ -341,6 +341,63 @@ export interface GitHubRepoRef {
   default_branch?: string;
 }
 
+export interface CreateRepoInput {
+  name: string;
+  description?: string;
+  private?: boolean;
+  template?: "vite-react-static";
+  deploy_to_cloudflare_pages?: boolean;
+  register_in_pravi?: boolean;
+}
+
+export interface PagesProject {
+  name: string;
+  subdomain: string;
+  pages_url: string;
+  canonical_url: string | null;
+}
+
+export interface CreateRepoResult {
+  repo: GitHubRepoResult;
+  initial_commit_pushed: boolean;
+  pages: PagesProject | null;
+  pages_skipped_reason: string | null;
+  pravi_repo_id: number | null;
+}
+
+export interface CloudflareAccountOption {
+  id: string;
+  name: string;
+}
+
+export interface CloudflareConnection {
+  id: number;
+  account_id: string;
+  account_name: string | null;
+  token_id: string | null;
+  created_at: string;
+}
+
+/** Shape of the 409 response body when the pasted token can see >1
+ * accounts and the modal needs to render an account picker. */
+export interface CloudflareAccountPickerRequired {
+  kind: "account_picker_required";
+  message: string;
+  accounts: CloudflareAccountOption[];
+}
+
+/** Thrown by `api.cloudflareConnect` when the server returns 409 with
+ * the account-picker payload. The modal narrows on `instanceof` and
+ * swaps the form for the picker UI without a second round-trip. */
+export class CloudflareAccountPickerError extends Error {
+  accounts: CloudflareAccountOption[];
+  constructor(message: string, accounts: CloudflareAccountOption[]) {
+    super(message);
+    this.name = "CloudflareAccountPickerError";
+    this.accounts = accounts;
+  }
+}
+
 export interface GitHubIssueLabel {
   name: string;
   color: string | null;
@@ -526,6 +583,64 @@ export const api = {
     const qs = q ? `?q=${encodeURIComponent(q)}` : "";
     return jsonReq<GitHubRepoResult[]>(`/api/auth/github/repos/search${qs}`);
   },
+
+  integrations: () =>
+    jsonReq<{ cloudflare: { configured: boolean }; github: { connected: boolean } }>(
+      "/api/auth/github/integrations",
+    ),
+
+  /** Active Cloudflare connection, or null if not connected. */
+  cloudflareMe: () =>
+    jsonReq<CloudflareConnection | null>("/api/auth/cloudflare/me"),
+
+  /** Verify and persist a Cloudflare API token. Returns the active
+   * connection on success. On 409 (token sees multiple accounts and no
+   * account_id was supplied), throws a `CloudflareAccountPickerError`
+   * carrying the candidate list so the modal can render an account
+   * picker without a second round-trip. */
+  cloudflareConnect: async (
+    body: { api_token: string; account_id?: string },
+  ): Promise<CloudflareConnection> => {
+    const r = await fetch("/api/auth/cloudflare/connect", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    if (r.status === 409) {
+      const payload = (await r.json().catch(() => null)) as {
+        detail?: CloudflareAccountPickerRequired;
+      } | null;
+      const detail = payload?.detail;
+      if (detail?.kind === "account_picker_required") {
+        throw new CloudflareAccountPickerError(detail.message, detail.accounts);
+      }
+    }
+    if (!r.ok) {
+      let msg = `${r.status} ${r.statusText}`;
+      try {
+        const body = await r.json();
+        if (typeof body?.detail === "string") msg = body.detail;
+      } catch {
+        // ignore
+      }
+      throw new Error(msg);
+    }
+    return r.json() as Promise<CloudflareConnection>;
+  },
+
+  cloudflareDisconnect: () =>
+    jsonReq<{ revoked: boolean }>("/api/auth/cloudflare/disconnect", {
+      method: "POST",
+      body: "{}",
+    }),
+
+  /** Create a brand-new GitHub repo, seed with a template, optionally
+   * connect to Cloudflare Pages, and register in pravi. */
+  createNewRepo: (body: CreateRepoInput) =>
+    jsonReq<CreateRepoResult>("/api/auth/github/repos/new", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
 
   /** List issues on a connected GitHub repo (PRs filtered out server-side). */
   listGithubIssues: (

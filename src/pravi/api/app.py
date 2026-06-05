@@ -9,6 +9,7 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 from pravi.api.auth_routes import router as auth_router
+from pravi.api.cloudflare_routes import router as cloudflare_router
 from pravi.api.routes import router
 from pravi.config import apply_anthropic_auth, get_settings
 from pravi.logging_setup import configure_logging
@@ -43,6 +44,7 @@ def create_app() -> FastAPI:
 
     app.include_router(router)
     app.include_router(auth_router)
+    app.include_router(cloudflare_router)
 
     # In production: serve the built React app from FastAPI. In dev, Vite
     # runs separately; this just means the index page is unavailable until
