@@ -8,6 +8,7 @@ import { ChildStatusChips } from "../components/ChildStatusChips";
 import { GitHubConnectButton } from "../components/GitHubConnectButton";
 import { PersonaChip } from "../components/PersonaChip";
 import { PersonaSpendCard } from "../components/PersonaSpendCard";
+import { StackSpendCard } from "../components/StackSpendCard";
 import { StatusBadge } from "../components/StatusBadge";
 
 // Tickets in these statuses need human action on the plan.
@@ -108,6 +109,14 @@ export function HomePage() {
     staleTime: 5 * 60_000,
   });
   const personaCatalog = personasQ.data ?? null;
+
+  // Stack catalog — friendly names for the StackSpendCard. Same caching.
+  const stacksQ = useQuery({
+    queryKey: ["stacks"],
+    queryFn: () => api.listStacks(),
+    staleTime: 5 * 60_000,
+  });
+  const stackCatalog = stacksQ.data ?? null;
 
   const bulkDeleteMut = useMutation({
     mutationFn: (ids: string[]) => api.bulkDeleteTickets(ids),
@@ -283,6 +292,7 @@ export function HomePage() {
       </section>
 
       <PersonaSpendCard personaCatalog={personaCatalog} />
+      <StackSpendCard stackCatalog={stackCatalog} />
 
       <Section
         title={`Closed ${inFlightKind === "task" ? "tasks" : `${inFlightKind}s`}`}
