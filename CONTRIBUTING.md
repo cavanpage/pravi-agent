@@ -93,6 +93,7 @@ tails their combined logs. Ctrl-C tears it all down.
 ./scripts/dev.sh                # default: clean + build + run
 ./scripts/dev.sh --no-build     # skip the React build (faster restart)
 ./scripts/dev.sh --vite         # also start Vite hot-reload on :5173
+./scripts/dev.sh --no-vite      # explicit off (the default)
 ./scripts/dev.sh --reset-db     # drop docker volumes (DANGER)
 ./scripts/dev.sh --help
 ```
@@ -210,6 +211,9 @@ Before you mark a PR ready for review, walk this list:
 - [ ] New code has tests, or the PR description says why it doesn't.
 - [ ] If the schema changed: a new Alembic revision is committed alongside the
       `models.py` change, and `alembic upgrade head` succeeds from a fresh DB.
+- [ ] If API routes or schemas changed: `uv run pravi openapi-dump` was run and
+      the regenerated `docs/api/openapi.json` is committed (a freshness test
+      fails otherwise).
 - [ ] If behaviour changed: `README.md`, `.env.example`, or `docs/adr/` are
       updated to match.
 - [ ] If a new env var was added: it's in `.env.example` with a comment, and

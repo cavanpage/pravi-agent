@@ -126,6 +126,26 @@ is active).
 **Index:** `ix_github_connections_revoked_at_id` covers the hot
 "latest-non-revoked" lookup.
 
+### `CloudflareConnection` — `cloudflare_connections`
+
+Persisted Cloudflare API token backing the "new repo + Pages deploy" flow
+(see the [user guide](../user-guide/new-repo-and-cloudflare.md)). Same
+single-user model as `GitHubConnection`: latest non-revoked row is "the
+connection", disconnect sets `revoked_at`, re-connect inserts a fresh row.
+When no row is active, the Pages helpers fall back to
+`PRAVI_CLOUDFLARE_API_TOKEN` / `PRAVI_CLOUDFLARE_ACCOUNT_ID` env vars.
+
+| Column | Notes |
+| --- | --- |
+| `id` | PK. |
+| `api_token` | Bearer token (`Text`) pasted by the user. |
+| `account_id`, `account_name` | The Cloudflare account picked at connect time. |
+| `token_id` | Cloudflare's ID for the token (from `/user/tokens/verify`). |
+| `revoked_at` | Nullable. Non-null rows are skipped by the "current connection" lookup. |
+
+**Index:** `ix_cloudflare_connections_revoked_at_id` — same
+"latest-non-revoked" shape as the GitHub one.
+
 ### `Clarification` — `clarifications`
 
 One architect "clarify" call against an epic. Persisted (rather than
@@ -272,21 +292,22 @@ the script location is [`src/pravi/db/migrations/`](../../src/pravi/db/migration
 with revision files in
 [`src/pravi/db/migrations/versions/`](../../src/pravi/db/migrations/versions/).
 
-Notable revisions, in dependency order:
+Revisions, in dependency order (each row's `down_revision` is the row above):
 
 | Revision | Adds |
 | --- | --- |
 | `38b585b5fd5a_initial` | Base schema (repos, tickets, plans, runs, events). |
-| `a9c3e51b7f02_repos_local_path_nullable` | Makes `repos.local_path` nullable (ADR 0003). |
-| `45ce5d528341_github_connections_table` | `github_connections`. |
 | `a1f3c9b2d4e6_events_run_id` | Adds `events.run_id` + index. |
-| `daf5d2562f80_clarifications_table` | `clarifications`. |
 | `461d70ada9af_ticket_hierarchy_kind_parent_id` | `tickets.kind` + `parent_id` + hierarchy indexes. |
-| `e3a7f9c8b1d2_agent_drafts_table` | `agent_drafts`. |
-| `b7751ed99d5e_feature_dependencies` | `feature_dependencies`. |
-| `c4e2b8d6f1a9_ticket_persona_stack` | `tickets.persona`, `tickets.stack` (ADR 0004). |
 | `c2a8d4e7f1b9_ticket_cost_ceiling` | `tickets.cost_ceiling_usd`. |
+| `b7751ed99d5e_feature_dependencies` | `feature_dependencies`. |
+| `daf5d2562f80_clarifications_table` | `clarifications`. |
+| `45ce5d528341_github_connections_table` | `github_connections`. |
+| `e3a7f9c8b1d2_agent_drafts_table` | `agent_drafts`. |
 | `f5b8a2c3d4e7_ticket_github_issue_url` | `tickets.github_issue_url`. |
+| `a9c3e51b7f02_repos_local_path_nullable` | Makes `repos.local_path` nullable (ADR 0003). |
+| `c4e2b8d6f1a9_ticket_persona_stack` | `tickets.persona`, `tickets.stack` (ADR 0004). |
+| `d8f1a2b3c5e4_cloudflare_connections_table` | `cloudflare_connections`. |
 
 To generate a new revision after editing `models.py`:
 

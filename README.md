@@ -2,10 +2,11 @@
 
 Agentic feature builder for domain-driven repos, powered by Claude.
 
-**Status:** Working POC. Connect a GitHub repo, browse its issues, decompose
+**Status:** Working POC. Connect a GitHub repo (or create one from a starter
+template, with optional Cloudflare Pages deploy), browse its issues, decompose
 an epic into a dependency-aware feature/task tree, let the architect draft
 plans (or import work straight from an issue), then have a Claude dev agent
-build it in an isolated worktree and open a draft PR — all from a React UI.
+build it in an isolated worktree and open a PR — all from a React UI.
 
 ## What it is
 
@@ -14,7 +15,7 @@ build it in an isolated worktree and open a draft PR — all from a React UI.
 1. **Plan** — the architect agent (Claude, read-only) clarifies, decomposes an
    epic into features + tasks, and drafts per-task implementation plans.
 2. **Build** — a Claude dev agent (claude-agent-sdk) executes the approved plan
-   inside a per-ticket git worktree, runs domain tests, and pushes a draft PR.
+   inside a per-ticket git worktree, runs domain tests, and pushes a PR.
 3. **Review** — a human reviews the plan up front and the PR at the end.
 
 Principles:
@@ -49,7 +50,22 @@ Principles:
 - Browse a repo's **issues** at `/issues` and convert any of them into an epic,
   feature, or task — pravi comments + labels (`pravi-imported`) back on the
   source issue for traceability.
-- On a successful dev run, pravi pushes the branch and opens a **draft PR**.
+- On a successful dev run, pravi pushes the branch and opens a **PR** —
+  ready-for-review by default; set `PRAVI_PR_OPEN_AS_DRAFT=true` for drafts.
+
+**New repo + Cloudflare Pages** (in-UI)
+- Create a brand-new GitHub repo from the header: pravi creates it via the API,
+  pushes an initial commit from a starter template
+  (`src/pravi/templates/` — currently `vite-react-static`, a Vite + React +
+  Tailwind scaffold), and registers it as a pravi repo so you can start epics
+  against it immediately.
+- Optionally provision a **Cloudflare Pages** project bound to the new repo —
+  Cloudflare then auto-deploys on every push to the default branch. Connect
+  Cloudflare by pasting an API token in the UI ("Connect Cloudflare" in the
+  new-repo modal) or via `PRAVI_CLOUDFLARE_API_TOKEN` +
+  `PRAVI_CLOUDFLARE_ACCOUNT_ID` in `.env`. One-time browser step: authorize
+  Cloudflare's GitHub App (Cloudflare dashboard → Workers & Pages → Connect
+  to Git), or Pages builds won't trigger.
 
 **Personas and stacks** (two-axis specialization)
 - Each task carries a **persona** (`architect`, `frontend`, `backend`, `tester`,
@@ -108,9 +124,10 @@ Principles:
 
 ## Documentation
 
-- **[User guide](docs/user-guide/README.md)** — index of the four guides for
-  bringing pravi to your own repo: `.builder/domains.yaml`, GitHub OAuth,
-  the persona/stack catalog, and budget ceilings + spend views.
+- **[User guide](docs/user-guide/README.md)** — guides for bringing pravi to
+  your own repo: `.builder/domains.yaml`, GitHub OAuth, creating repos +
+  Cloudflare Pages, the persona/stack catalog, and budget ceilings + spend
+  views.
 - **[Architecture decision records](docs/adr/README.md)** — the "why" behind
   Temporal, the LLM-agnostic architect, sandbox seams, personas, and no-RAG.
 - **[LLM shakedown notes](docs/llm-shakedown.md)** — empirical notes from
@@ -143,9 +160,17 @@ session). See `src/pravi/config.py` for the resolution order.
 <https://github.com/settings/developers> with callback
 `http://localhost:8765/api/auth/github/callback`, then set
 `PRAVI_GITHUB_OAUTH_CLIENT_ID` + `PRAVI_GITHUB_OAUTH_CLIENT_SECRET` in `.env`.
-This unlocks repo search, issue browsing/import, and auto-PR.
+This unlocks repo search, repo creation, issue browsing/import, and auto-PR.
+See the [GitHub OAuth guide](docs/user-guide/github-oauth.md).
 
-Then run the three processes:
+**Cloudflare (optional)** — to have new repos auto-deploy to Cloudflare Pages,
+connect Cloudflare from the new-repo modal (paste an API token) or set
+`PRAVI_CLOUDFLARE_API_TOKEN` + `PRAVI_CLOUDFLARE_ACCOUNT_ID` in `.env`.
+
+**One command** — `./scripts/dev.sh` does everything below (docker up,
+migrations, search attributes, React build, all three processes, combined
+logs; Ctrl-C tears it down — see [CONTRIBUTING.md](CONTRIBUTING.md) for
+flags). Or run the three processes yourself:
 
 ```bash
 # T1 — features worker (orchestration + cheap git/github activities)
@@ -195,6 +220,8 @@ uv run pravi plan TEST-001 --no-editor \
   --repo /path/to/repo --domains-file ./examples/blissful-infra-domains.yaml
 
 uv run pravi ticket list-domains --repo /path/to/repo   # inspect a repo's domains
+
+uv run pravi openapi-dump      # regenerate docs/api/openapi.json after API changes
 ```
 
 Per-run hard limits (wall clock, turns, $ budget) for the dev agent come from
@@ -212,8 +239,9 @@ Per-run hard limits (wall clock, turns, $ budget) for the dev agent come from
 3. On approve: writes a `Plan` row, sends the `approve_plan(plan_id)` signal.
 4. The workflow wakes, creates a worktree, runs the dev agent on the LLM queue,
    advances status `planning → plan_approved → in_progress`, then pushes the
-   branch and opens a draft PR (`pr_open`) when commits exist + GitHub is
-   connected.
+   branch and opens a PR (`pr_open`) when commits exist + GitHub is
+   connected. PRs open ready-for-review by default
+   (`PRAVI_PR_OPEN_AS_DRAFT=true` for drafts).
 
 Epics and features are organizational containers (no workflow runs); their
 tasks each boot a `FeatureWorkflow` lazily when you start them.
@@ -246,26 +274,34 @@ stack trace:
 
 ```
 src/pravi/
-├── cli/         # Typer: ticket run/start/list-domains, dev, plan, web
-├── api/         # FastAPI app (REST + SSE): routes, auth_routes (GitHub OAuth), schemas
+├── cli/         # Typer: ticket run/start/list-domains, dev, plan, web, openapi-dump
+├── api/         # FastAPI app (REST + SSE): routes, auth_routes (GitHub OAuth +
+│                #   repo creation), cloudflare_routes (connect/disconnect), schemas
 ├── workflows/   # Temporal: SmokeWorkflow, DevWorkflow, FeatureWorkflow
 ├── activities/  # git, dev (claude-agent-sdk), db (ticket/plan I/O), pr (push + open PR)
 ├── agents/
 │   ├── protocols.py     # Architect + DevAgent Protocols, shared dataclasses
 │   ├── factory.py       # get_architect() / get_dev_agent() provider dispatch
 │   ├── architects/      # claude.py, litellm.py, context.py, clarify/decompose parsers
-│   └── dev/             # claude.py (the only dev-agent impl)
-├── services/    # background jobs: clarification, agent_draft (decompose+plan), github
+│   ├── dev/             # claude.py (the only dev-agent impl)
+│   └── sandbox/         # Sandbox Protocol + LocalWorktreeSandbox (ADR 0003)
+├── services/    # background jobs + integrations: clarification, agent_draft
+│                #   (decompose+plan), github, cloudflare (Pages projects)
+├── events/      # live + durable run-event stream (Event rows + Postgres NOTIFY → SSE)
 ├── budget/      # cost rollup + ceiling resolution across the hierarchy
 ├── sdk_runner/  # claude-agent-sdk wrapper with heartbeats + budget guardrails
 ├── domains/     # `.builder/domains.yaml` loader
+├── personas/    # persona + stack catalogs (ADR 0004)
 ├── prompts/     # versioned prompts: architect, clarify, decompose, developer
+├── templates/   # new-repo starter templates (vite-react-static)
 ├── db/          # SQLAlchemy models + Alembic migrations
 └── config.py
 
 web/             # Vite + React + TS UI
 ├── src/pages/       # HomePage, NewTicketPage, IssuesPage, TicketPlanPage, RunsPage
 ├── src/components/  # DecomposePanel, RoadmapView, DependencyEditor, PlanEditor,
-│                    #   TicketInfoCard, BudgetMeter, GitHubConnectButton, LiveRunPanel
+│                    #   TicketInfoCard, BudgetMeter, LiveRunPanel, SubtreeActivityPanel,
+│                    #   GitHubConnectButton, CreateRepoModal, CloudflareConnectModal,
+│                    #   Persona{Chip,Picker,SpendCard}, ChildStatusChips, StatusBadge, …
 └── src/lib/         # api.ts (REST + SSE), progressMarkers, useHomeViewState, useIssuesViewState
 ```

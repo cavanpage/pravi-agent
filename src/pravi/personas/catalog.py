@@ -1,4 +1,4 @@
-"""The 15-persona catalog — see ADR 0004 for the design.
+"""The 19-persona catalog (6 active, 13 coming-soon) — see ADR 0004 for the design.
 
 All entries are coded; the `status` field gates whether the decompose
 architect is allowed to pick a persona. Active personas have real
@@ -6,6 +6,7 @@ architect is allowed to pick a persona. Active personas have real
 personas exist as labels for the roadmap UI but the dev agent falls
 back to the generic prompt if one is assigned anyway.
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field
@@ -132,8 +133,7 @@ _TECH_WRITER = Persona(
     group=PersonaGroup.product,
     status=PersonaStatus.active,
     description=(
-        "Translates code / architecture / behavior into readable docs. "
-        "Defaults to a cheaper model."
+        "Translates code / architecture / behavior into readable docs. Defaults to a cheaper model."
     ),
     system_prompt_modifier=(
         "Operate as a technical writer. Output is markdown — READMEs, "
@@ -150,10 +150,7 @@ _OTHER = Persona(
     name="Other (generic)",
     group=PersonaGroup.other,
     status=PersonaStatus.active,
-    description=(
-        "Escape hatch — no persona-specific framing. Today's generic "
-        "dev agent prompt."
-    ),
+    description=("Escape hatch — no persona-specific framing. Today's generic dev agent prompt."),
     system_prompt_modifier="",
     baseline_skills=[],
 )
@@ -288,9 +285,7 @@ ALL_PERSONAS: list[Persona] = [
 ]
 
 
-ACTIVE_PERSONAS: list[Persona] = [
-    p for p in ALL_PERSONAS if p.status is PersonaStatus.active
-]
+ACTIVE_PERSONAS: list[Persona] = [p for p in ALL_PERSONAS if p.status is PersonaStatus.active]
 
 
 _BY_SLUG: dict[str, Persona] = {p.slug: p for p in ALL_PERSONAS}

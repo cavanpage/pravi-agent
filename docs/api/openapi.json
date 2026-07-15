@@ -361,6 +361,80 @@
         "title": "ClarifyDraftOut",
         "type": "object"
       },
+      "CloudflareConnectRequest": {
+        "description": "Body for `POST /api/auth/cloudflare/connect`.\n\n`account_id` is optional \u2014 if the token is scoped to a single\naccount, the server auto-picks it. If the token can see multiple\nand `account_id` is missing, the endpoint returns 409 with the\ncandidate list so the UI can render an account picker.",
+        "properties": {
+          "account_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Account Id"
+          },
+          "api_token": {
+            "title": "Api Token",
+            "type": "string"
+          }
+        },
+        "required": [
+          "api_token"
+        ],
+        "title": "CloudflareConnectRequest",
+        "type": "object"
+      },
+      "CloudflareConnectionOut": {
+        "description": "Current Cloudflare connection state. Mirrors `GitHubConnectionOut`.",
+        "properties": {
+          "account_id": {
+            "title": "Account Id",
+            "type": "string"
+          },
+          "account_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Account Name"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "integer"
+          },
+          "token_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Token Id"
+          }
+        },
+        "required": [
+          "id",
+          "account_id",
+          "account_name",
+          "token_id",
+          "created_at"
+        ],
+        "title": "CloudflareConnectionOut",
+        "type": "object"
+      },
       "CostRollupOut": {
         "description": "Response for `/api/tickets/{external_id}/cost-rollup`.\n\n`chain` is self first, then each ancestor in order. UI can show which\nlevel is currently the binding constraint via `constraint_source`.",
         "properties": {
@@ -425,6 +499,95 @@
           "chain"
         ],
         "title": "CostRollupOut",
+        "type": "object"
+      },
+      "CreateRepoRequest": {
+        "description": "Body for `POST /api/auth/github/repos/new`.",
+        "properties": {
+          "deploy_to_cloudflare_pages": {
+            "default": false,
+            "title": "Deploy To Cloudflare Pages",
+            "type": "boolean"
+          },
+          "description": {
+            "default": "",
+            "title": "Description",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "private": {
+            "default": true,
+            "title": "Private",
+            "type": "boolean"
+          },
+          "register_in_pravi": {
+            "default": true,
+            "title": "Register In Pravi",
+            "type": "boolean"
+          },
+          "template": {
+            "default": "vite-react-static",
+            "title": "Template",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "title": "CreateRepoRequest",
+        "type": "object"
+      },
+      "CreateRepoResult": {
+        "description": "Outcome of a new-repo create. Surfaces what happened on each leg\nso the UI can render success / partial-success / what-to-do-next.",
+        "properties": {
+          "initial_commit_pushed": {
+            "title": "Initial Commit Pushed",
+            "type": "boolean"
+          },
+          "pages": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PagesProjectOut"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "pages_skipped_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pages Skipped Reason"
+          },
+          "pravi_repo_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pravi Repo Id"
+          },
+          "repo": {
+            "$ref": "#/components/schemas/GitHubRepoOut"
+          }
+        },
+        "required": [
+          "repo",
+          "initial_commit_pushed"
+        ],
+        "title": "CreateRepoResult",
         "type": "object"
       },
       "CreateTicketRequest": {
@@ -950,6 +1113,11 @@
             "title": "Name",
             "type": "string"
           },
+          "open_issues_count": {
+            "default": 0,
+            "title": "Open Issues Count",
+            "type": "integer"
+          },
           "owner": {
             "title": "Owner",
             "type": "string"
@@ -1030,6 +1198,40 @@
           }
         },
         "title": "HTTPValidationError",
+        "type": "object"
+      },
+      "PagesProjectOut": {
+        "properties": {
+          "canonical_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Canonical Url"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "pages_url": {
+            "title": "Pages Url",
+            "type": "string"
+          },
+          "subdomain": {
+            "title": "Subdomain",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "subdomain",
+          "pages_url"
+        ],
+        "title": "PagesProjectOut",
         "type": "object"
       },
       "PersistedClarificationOut": {
@@ -1650,6 +1852,70 @@
         "title": "StackSpendOut",
         "type": "object"
       },
+      "StartChildrenResult": {
+        "description": "Outcome of `POST /tickets/{external_id}/start-children`.\n\n`started` lists the tasks whose FeatureWorkflows were launched.\n`skipped` lists tasks that weren't eligible (already started, or\nwaiting on a prerequisite feature). `dry_run=true` returns the same\nbreakdown without launching anything \u2014 used to power the confirmation\nmodal in the UI.",
+        "properties": {
+          "dry_run": {
+            "title": "Dry Run",
+            "type": "boolean"
+          },
+          "parent_external_id": {
+            "title": "Parent External Id",
+            "type": "string"
+          },
+          "parent_kind": {
+            "title": "Parent Kind",
+            "type": "string"
+          },
+          "skipped": {
+            "items": {
+              "$ref": "#/components/schemas/StartChildrenSkipped"
+            },
+            "title": "Skipped",
+            "type": "array"
+          },
+          "started": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Started",
+            "type": "array"
+          }
+        },
+        "required": [
+          "parent_external_id",
+          "parent_kind",
+          "dry_run",
+          "started",
+          "skipped"
+        ],
+        "title": "StartChildrenResult",
+        "type": "object"
+      },
+      "StartChildrenSkipped": {
+        "description": "One task skipped by the batch-start endpoint, with a human-readable\nreason. Surfaced in the UI as 'N tasks skipped \u2014 see why'.",
+        "properties": {
+          "external_id": {
+            "title": "External Id",
+            "type": "string"
+          },
+          "reason": {
+            "title": "Reason",
+            "type": "string"
+          },
+          "title": {
+            "title": "Title",
+            "type": "string"
+          }
+        },
+        "required": [
+          "external_id",
+          "title",
+          "reason"
+        ],
+        "title": "StartChildrenSkipped",
+        "type": "object"
+      },
       "TicketBudgetUpdate": {
         "description": "PATCH body for `/api/tickets/{external_id}/budget`.\n\nPass null to clear (revert to inheritance). Cannot be negative.",
         "properties": {
@@ -1681,6 +1947,14 @@
             "default": 0,
             "title": "Child Count",
             "type": "integer"
+          },
+          "child_status_counts": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "default": {},
+            "title": "Child Status Counts",
+            "type": "object"
           },
           "cost_ceiling_usd": {
             "anyOf": [
@@ -1880,6 +2154,93 @@
   },
   "openapi": "3.1.0",
   "paths": {
+    "/api/auth/cloudflare/connect": {
+      "post": {
+        "description": "Verify a pasted API token and persist it as the active connection.\n\nFlow:\n  1. Probe `/user/tokens/verify` \u2192 reject 401/403 as \"bad token\".\n  2. Probe `/accounts` \u2192 discover what the token can see.\n  3. If exactly one account \u2192 auto-pick it.\n  4. If multiple and `account_id` provided \u2192 use that one.\n  5. If multiple and `account_id` not provided \u2192 409 with the list\n     so the UI can render a picker.\n  6. Insert a fresh `cloudflare_connections` row.",
+        "operationId": "connect_api_auth_cloudflare_connect_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CloudflareConnectRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CloudflareConnectionOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Connect"
+      }
+    },
+    "/api/auth/cloudflare/disconnect": {
+      "post": {
+        "description": "Soft-delete the active Cloudflare connection. Future Pages calls\nfall back to env-var creds if any, else `is_configured()` flips\nfalse and the create-repo modal disables the Pages toggle.",
+        "operationId": "disconnect_api_auth_cloudflare_disconnect_post",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Disconnect Api Auth Cloudflare Disconnect Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Disconnect"
+      }
+    },
+    "/api/auth/cloudflare/me": {
+      "get": {
+        "description": "Return the active Cloudflare connection, or null if not connected.\nUI uses this to render \"connected as X\" instead of the connect CTA.",
+        "operationId": "me_api_auth_cloudflare_me_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/CloudflareConnectionOut"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "title": "Response Me Api Auth Cloudflare Me Get"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Me"
+      }
+    },
     "/api/auth/github/callback": {
       "get": {
         "description": "Token-exchange endpoint. GitHub redirects here with `code` + `state`.\n\nOn success we redirect back to the configured `github_oauth_success_redirect`\nso the user lands on the app, not a JSON blob. Errors land on the same\nURL with `?github_auth_error=...` so the UI can surface a toast.",
@@ -1895,6 +2256,32 @@
           }
         },
         "summary": "Callback"
+      }
+    },
+    "/api/auth/github/integrations": {
+      "get": {
+        "description": "Which optional integrations are configured. The new-repo modal\nuses this to gate the 'deploy to Cloudflare Pages' toggle so the\nuser doesn't tick something that'll silently no-op at submit time.",
+        "operationId": "integration_status_api_auth_github_integrations_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": {
+                    "additionalProperties": {
+                      "type": "boolean"
+                    },
+                    "type": "object"
+                  },
+                  "title": "Response Integration Status Api Auth Github Integrations Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Integration Status"
       }
     },
     "/api/auth/github/login": {
@@ -1960,6 +2347,45 @@
           }
         },
         "summary": "Me"
+      }
+    },
+    "/api/auth/github/repos/new": {
+      "post": {
+        "description": "Create a brand-new GitHub repo, seed it with a starter template,\noptionally wire it up to Cloudflare Pages for auto-deploy, and\nregister it as a pravi Repo so it's immediately usable as a ticket\ntarget.\n\nSteps:\n  1. POST /user/repos \u2192 empty repo on GitHub\n  2. Local temp checkout, write template files, push initial commit\n  3. (Optional) Cloudflare Pages project tied to this repo\n  4. (Optional) Register a pravi Repo row pointing at the local clone",
+        "operationId": "create_new_repo_api_auth_github_repos_new_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateRepoRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CreateRepoResult"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Create New Repo"
       }
     },
     "/api/auth/github/repos/search": {
@@ -3474,6 +3900,114 @@
         "summary": "Run Stream"
       }
     },
+    "/api/tickets/{external_id}/run/subtree-stream": {
+      "get": {
+        "description": "SSE: live timeline aggregated across every descendant task of a\nfeature or epic. Drives the \"what are agents doing right now under\nthis whole subtree\" feed.\n\nEach event arrives tagged with `ticket_external_id` + `ticket_title`\nso the UI can show which task emitted it. The most recent `replay`\nevents across the subtree are sent on connect (so reloads don't\nblank out), then live events stream as they happen.\n\nUnlike `/run/stream`, this endpoint never auto-closes \u2014 the user\nkeeps watching as new task workflows fire off under the parent.\nDisconnect by closing the EventSource client-side.",
+        "operationId": "run_subtree_stream_api_tickets__external_id__run_subtree_stream_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "external_id",
+            "required": true,
+            "schema": {
+              "title": "External Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "replay",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "title": "Replay",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Run Subtree Stream"
+      }
+    },
+    "/api/tickets/{external_id}/start-children": {
+      "post": {
+        "description": "Batch-start workflows for all eligible task descendants of a feature\nor epic. **Skips the architect plan step** \u2014 synthesizes a Plan from\neach task's body and proceeds straight to dev. Review happens at PR\ntime, not plan-approve time.\n\nEligibility:\n  - feature parent \u2192 all direct pending task children\n  - epic parent \u2192 pending tasks in features whose prerequisite\n    features are all done (tasks at `pr_open` or `merged`).\n\nPass `dry_run=true` to preview the (started, skipped) breakdown\nwithout launching anything \u2014 drives the confirmation modal.",
+        "operationId": "start_children_api_tickets__external_id__start_children_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "external_id",
+            "required": true,
+            "schema": {
+              "title": "External Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "base_ref",
+            "required": false,
+            "schema": {
+              "default": "main",
+              "title": "Base Ref",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "dry_run",
+            "required": false,
+            "schema": {
+              "default": false,
+              "title": "Dry Run",
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StartChildrenResult"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Start Children"
+      }
+    },
     "/api/tickets/{external_id}/start-workflow": {
       "post": {
         "description": "Launch a FeatureWorkflow for an existing task ticket.\n\nUsed by tasks materialized through epic decomposition \u2014 they exist in\nthe DB but haven't kicked off their workflow yet. Idempotent against the\nALLOW_DUPLICATE_FAILED_ONLY reuse policy.",
@@ -3582,6 +4116,43 @@
           }
         },
         "summary": "Healthz"
+      }
+    },
+    "/{path}": {
+      "get": {
+        "operationId": "spa_fallback__path__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "path",
+            "required": true,
+            "schema": {
+              "title": "Path",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Spa Fallback"
       }
     }
   }

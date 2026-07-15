@@ -10,6 +10,12 @@ provider* or *how to plug in a remote sandbox*, the short answer is "implement
 the relevant Protocol and add a branch to its factory." The long answer is
 below.
 
+> Out of scope here: the GitHub/Cloudflare integration surface — repo
+> creation from starter templates (`src/pravi/templates/`,
+> `src/pravi/api/auth_routes.py`) and Cloudflare Pages provisioning
+> (`src/pravi/services/cloudflare.py`, `src/pravi/api/cloudflare_routes.py`).
+> See the [new repos & Cloudflare Pages guide](../user-guide/new-repo-and-cloudflare.md).
+
 ## The two roles
 
 > _See also: [ADR 0002 — LLM-agnostic architect, Claude-only dev](../adr/0002-llm-agnostic-architect-claude-only-dev.md)._

@@ -278,18 +278,16 @@ There are two override paths:
    you want to re-shape multiple tickets at once or assign a slug the
    architect didn't think to mint (e.g. flipping a feature to a custom
    `kotlin-ktor` stack).
-2. **Edit per ticket after approve.** Once the tree is materialized,
-   each ticket page has a **PersonaPicker** dropdown (active personas
-   selectable, coming-soon disabled with a tooltip) and a stack field
-   you can change. Updates take effect on the *next* dev run for that
-   ticket — they don't retroactively change a run that's already
-   finished, but they do change how `/spend/by-persona` and
-   `/spend/by-stack` attribute future spend.
+2. **Pick at manual creation.** The new-ticket form has a
+   **PersonaPicker** dropdown (active personas selectable, coming-soon
+   disabled with a tooltip) and a stack field.
 
-`PATCH /tickets/{external_id}` accepts `persona` and `stack` as
-optional fields; only the keys you send are overwritten (sending
-`null` clears the assignment, omitting the key leaves it alone). The
-UI uses this endpoint behind both override paths.
+Persona and stack are **set once, at ticket creation** — there is
+currently no endpoint to edit them on an existing ticket (the only
+ticket-level PATCH is `/api/tickets/{external_id}/budget`). Editing
+persona/stack in place on the ticket page is on the roadmap; until
+then, get the assignment right before approve via the YAML path
+above.
 
 ### Inheritance on manual ticket creation
 
@@ -306,10 +304,10 @@ propagate.
 
 Two endpoints make persona / stack assignment visible after the fact:
 
-- `GET /spend/by-persona?window=7d` — total dev-run cost, run count,
+- `GET /api/spend/by-persona?window=7d` — total dev-run cost, run count,
   and distinct-ticket count, grouped by `tickets.persona`. NULL
   persona aggregates under `other`.
-- `GET /spend/by-stack?window=7d` — same shape, grouped by
+- `GET /api/spend/by-stack?window=7d` — same shape, grouped by
   `tickets.stack`. NULL stack aggregates under `unknown`.
 
 The dashboard's **PersonaSpendCard** consumes these to render the

@@ -3,6 +3,7 @@
 Catches catalog-shape regressions: someone removes a slug, renames one,
 accidentally flips an active/coming_soon status, or breaks the lookup map.
 """
+
 from __future__ import annotations
 
 
@@ -51,7 +52,7 @@ def test_catalog_has_exactly_six_active_personas():
     assert slugs == {"architect", "frontend", "backend", "tester", "tech_writer", "other"}
 
 
-def test_catalog_has_all_15_personas():
+def test_catalog_has_full_roadmap_of_personas():
     """The full roadmap is part of the contract — coming_soon entries
     show in the UI as a roadmap signal."""
     from pravi.personas import ALL_PERSONAS

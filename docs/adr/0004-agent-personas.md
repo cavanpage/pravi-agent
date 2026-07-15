@@ -155,9 +155,11 @@ a clean skill-loading API, the wiring is a one-place change.
   `baseline_skills` and `additional_skills`.
 - UI: persona chip on ticket row + ticket page; PersonaPicker with
   active personas selectable, coming-soon disabled (tooltip explains
-  why). Stack inferred display; editable.
-- Cost rollup: `budget/rollup.py` adds `by_persona` and `by_stack`
-  breakdowns to `BudgetRollup`.
+  why). Persona/stack are set at creation (decompose or the new-ticket
+  form); in-place edit is still roadmap.
+- Cost rollup: `budget/by_persona.py` provides `aggregate_by_persona`
+  and `aggregate_by_stack`, surfaced as `GET /api/spend/by-persona`
+  and `/api/spend/by-stack`.
 
 ## Consequences
 
@@ -241,8 +243,8 @@ Build now, wire skills when the API lands.
   truth.
 - `src/pravi/prompts/{decompose,developer}.py` — where the persona +
   stack params land.
-- `src/pravi/budget/rollup.py` — the per-persona / per-stack
-  breakdowns extend this.
+- `src/pravi/budget/by_persona.py` — the per-persona / per-stack
+  spend aggregations.
 
 ---
 

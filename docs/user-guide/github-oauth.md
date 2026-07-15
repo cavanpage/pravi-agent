@@ -3,7 +3,7 @@
 Pravi reaches GitHub through a user-owned OAuth App. Until you finish this
 walkthrough, the **Connect GitHub** button in the UI will return a `503
 GitHub OAuth is not configured` error and Pravi will refuse to search
-repos, browse issues, or push draft PRs.
+repos, create repos, browse issues, or push PRs.
 
 This guide covers the one-time setup. Five minutes, no code.
 
@@ -14,9 +14,10 @@ are set and a user has clicked **Connect GitHub** once:
 
 | Feature | Endpoint / page | What it does |
 |---|---|---|
-| Repo picker | `GET /api/repos/search` | Autocomplete in the new-ticket form — no more typing local clone paths. |
+| Repo picker | `GET /api/auth/github/repos/search` | Autocomplete in the new-ticket form — no more typing local clone paths. |
+| Repo creation | `POST /api/auth/github/repos/new` | Create a new repo from a starter template, optionally deployed to Cloudflare Pages — see [New repos & Cloudflare Pages](new-repo-and-cloudflare.md). |
 | Issue import | `/issues` page | Browse open/closed issues on a connected repo and import them as Pravi tickets in one click. |
-| Draft PR creation | `pr_activity` (automatic) | At the end of every task workflow Pravi pushes the dev branch and opens a **draft PR** against the repo's default branch. |
+| PR creation | `pr_activity` (automatic) | At the end of every task workflow Pravi pushes the dev branch and opens a **PR** against the repo's default branch — ready-for-review by default, draft if `PRAVI_PR_OPEN_AS_DRAFT=true`. |
 
 Routes that gate on the connection live in
 [`src/pravi/api/auth_routes.py`](../../src/pravi/api/auth_routes.py); they
@@ -52,7 +53,7 @@ Pravi requests two scopes by default (see
 `Settings.github_oauth_scopes` in `src/pravi/config.py`):
 
 - **`repo`** — read + write access to private repos. Required for pushing
-  the dev branch and opening draft PRs against private repos. If you only
+  the dev branch and opening PRs against private repos. If you only
   ever target public repos, you can override this to `public_repo` via
   `PRAVI_GITHUB_OAUTH_SCOPES=public_repo,read:user` in your `.env`.
 - **`read:user`** — read the authenticated user's profile so the UI can
@@ -107,7 +108,7 @@ If you forget the restart, `/api/auth/github/login` will keep raising
    |---|---|
    | `invalid_state` | The CSRF token didn't match. Click **Connect GitHub** again from the same browser session. |
    | `missing_code_or_state` | GitHub didn't include the expected query params — usually a callback-URL mismatch. |
-   | `bad_verification_code` | Token exchange failed. Check the client secret. |
+   | (an exception class name, e.g. `RuntimeError`) | Token exchange failed. Check the client secret. |
 
 ## 5. What's now unlocked
 
@@ -122,11 +123,18 @@ returning `401`:
   `/issues` page. Filters out pull requests; supports `state=open|closed|all`
   and a comma-separated `labels` filter. Each result can be imported as a
   Pravi ticket with one click.
-- **Automatic draft PR creation** — the Temporal `pr_activity` (see
+- **`POST /api/auth/github/repos/new`** — create a brand-new repo from a
+  starter template, optionally with a Cloudflare Pages deploy. Covered in
+  its own guide: [New repos & Cloudflare Pages](new-repo-and-cloudflare.md).
+- **`GET /api/auth/github/integrations`** — reports which optional
+  integrations are ready (`github.connected`, `cloudflare.configured`);
+  the create-repo modal uses it to gate the Pages toggle.
+- **Automatic PR creation** — the Temporal `pr_activity` (see
   `src/pravi/activities/pr_activity.py`) reuses the same connection token
-  to push the dev branch and open a draft PR against the repo's default
-  branch at the end of every task workflow. No extra config; if a
-  connection exists, PRs happen.
+  to push the dev branch and open a PR against the repo's default
+  branch at the end of every task workflow. PRs open **ready for review**
+  by default; set `PRAVI_PR_OPEN_AS_DRAFT=true` to open drafts instead.
+  No extra config; if a connection exists, PRs happen.
 
 ## 6. Disconnecting
 
@@ -138,10 +146,15 @@ GitHub will skip the consent screen if the scopes haven't changed.
 ## See also
 
 - [`src/pravi/api/auth_routes.py`](../../src/pravi/api/auth_routes.py) —
-  the four endpoints (`/login`, `/callback`, `/me`, `/logout`) plus the
-  two repo helpers used by the UI.
+  the OAuth endpoints (`/login`, `/callback`, `/me`, `/logout`) plus the
+  repo helpers (`/repos/search`, `/repos/{owner}/{name}/issues`,
+  `/repos/new`, `/integrations`).
 - [`src/pravi/services/github.py`](../../src/pravi/services/github.py) —
   token exchange, connection persistence, and the GitHub REST wrappers
-  (`search_user_repos`, `list_repo_issues`, `create_pull_request`).
+  (`search_user_repos`, `list_repo_issues`, `create_pull_request`,
+  `create_repo`, `push_initial_commit`, `ensure_repo_cloned`,
+  `comment_on_issue`, `add_labels_to_issue`).
 - [`src/pravi/config.py`](../../src/pravi/config.py) — all
   `github_oauth_*` settings and their defaults.
+- [New repos & Cloudflare Pages](new-repo-and-cloudflare.md) — the
+  create-repo + Pages deploy flow that builds on this connection.
