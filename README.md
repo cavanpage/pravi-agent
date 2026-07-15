@@ -302,6 +302,7 @@ web/             # Vite + React + TS UI
 ├── src/components/  # DecomposePanel, RoadmapView, DependencyEditor, PlanEditor,
 │                    #   TicketInfoCard, BudgetMeter, LiveRunPanel, SubtreeActivityPanel,
 │                    #   GitHubConnectButton, CreateRepoModal, CloudflareConnectModal,
-│                    #   Persona{Chip,Picker,SpendCard}, ChildStatusChips, StatusBadge, …
+│                    #   Persona{Chip,Picker,SpendCard}, StackSpendCard, ChildStatusChips,
+│                    #   StatusBadge, …
 └── src/lib/         # api.ts (REST + SSE), progressMarkers, useHomeViewState, useIssuesViewState
 ```

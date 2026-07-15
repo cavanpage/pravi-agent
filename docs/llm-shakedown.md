@@ -139,6 +139,7 @@ curl -s "http://localhost:8765/api/spend/by-persona?window=all" | python3 -m jso
 ## Out of scope for this shakedown
 
 - Per-stack spend widget (endpoint exists at `/api/spend/by-stack`, no UI yet)
+  — *since shipped as `StackSpendCard` on the home dashboard*
 - Edit-persona-in-place on TicketPlanPage (currently set-once on /new)
 - Auto-`domains.yaml` proposal at repo-connect time
 - Promoting a coming_soon persona to active

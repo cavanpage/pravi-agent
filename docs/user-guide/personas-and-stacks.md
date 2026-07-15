@@ -310,8 +310,8 @@ Two endpoints make persona / stack assignment visible after the fact:
 - `GET /api/spend/by-stack?window=7d` — same shape, grouped by
   `tickets.stack`. NULL stack aggregates under `unknown`.
 
-The dashboard's **PersonaSpendCard** consumes these to render the
-per-persona / per-stack FinOps view. If the rollup looks noisy, it's
+The dashboard's **PersonaSpendCard** and **StackSpendCard** consume
+these to render the per-persona / per-stack FinOps view. If the rollup looks noisy, it's
 usually because too many tickets are landing without persona /
 stack — either the architect isn't reaching for them or you're
 clearing them on edit.
