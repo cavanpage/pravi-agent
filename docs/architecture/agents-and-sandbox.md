@@ -20,15 +20,18 @@ below.
 
 > _See also: [ADR 0002 — LLM-agnostic architect, Claude-only dev](../adr/0002-llm-agnostic-architect-claude-only-dev.md)._
 
-| Role          | Mutates files? | LLM providers      | Tool loop                      |
-| ------------- | -------------- | ------------------ | ------------------------------ |
-| **Architect** | No             | Claude, LiteLLM    | Optional (Claude only)         |
-| **Dev agent** | Yes            | Claude only        | `claude-agent-sdk` owns it     |
+| Role          | Mutates files? | LLM providers | Tool loop                  |
+| ------------- | -------------- | ------------- | -------------------------- |
+| **Architect** | No             | Claude only   | Read-only subset           |
+| **Dev agent** | Yes            | Claude only   | `claude-agent-sdk` owns it |
 
-The split exists because plan-drafting (text in, text out) is cheap to make
-provider-agnostic, while reproducing claude-agent-sdk's tool loop for another
-LLM is a much larger effort with no concrete need yet. The Protocols make it
-*possible* to swap dev providers later; the absence of a second impl is
+Both roles run on claude-agent-sdk today. A LiteLLM architect existed and
+was dropped per ADR 0002's amendment (2026-07-17) — unused, and its
+parity tax wasn't worth the hedge. Cost tiering happens *within* Claude:
+each architect mode can pin its own model
+(`PRAVI_ARCHITECT_{CLARIFY,DECOMPOSE,DRAFT}_MODEL`), so cheap modes run on
+Haiku/Sonnet while heavy ones keep the default. The Protocols make it
+*possible* to add providers later; the absence of a second impl is
 deliberate.
 
 ## Protocols — `src/pravi/agents/protocols.py`
@@ -101,16 +104,11 @@ def get_architect() -> Architect:
     if s.architect_provider == "claude":
         from pravi.agents.architects.claude import ClaudeArchitect
         return ClaudeArchitect(model=s.architect_model, ...)
-    if s.architect_provider == "litellm":
-        from pravi.agents.architects.litellm import LiteLLMArchitect
-        return LiteLLMArchitect(model=s.architect_model or "gpt-5", ...)
     raise ValueError(...)
 ```
 
-Two implementation details worth noting:
+One implementation detail worth noting:
 
-- **Lazy imports**: each branch imports its impl inside the `if`. This keeps
-  the `litellm` dep optional for Claude-only installs and vice versa.
 - **Per-mode model overrides**: the architect accepts
   `clarify_model` / `decompose_model` / `draft_model` so cheap modes (clarify
   is a tiny prompt, ~one round trip) can use a smaller model than expensive
@@ -125,8 +123,6 @@ When a second dev provider arrives, add another branch.
 ```
 architects/
 ├── claude.py             # ClaudeArchitect — tool loop via claude-agent-sdk
-├── litellm.py            # LiteLLMArchitect — one-shot chat completion
-├── context.py            # Pre-pack context for non-Claude backends
 ├── clarify_parser.py     # ```yaml → list[ClarificationQuestion]
 └── decompose_parser.py   # ```yaml → list[DecomposedFeature]
 ```
@@ -164,42 +160,12 @@ already emitted a `ResultMessage`. The clarify / decompose / draft handlers
 all salvage the run in that case — if `result_msg` is populated, the error
 is logged at warning level and the run completes; otherwise it bubbles up.
 
-### `litellm.py` — `LiteLLMArchitect`
-
-Provider-agnostic via the `litellm` library. One-shot
-`litellm.acompletion(...)` call: **no tool use**. Because the model can't
-browse the repo itself, `context.build_context()` packs a slice of the repo
-into the user message and the system prompt is generated with
-`can_browse=False` so the model is told not to ask for more files.
-
-Model names follow the LiteLLM convention — e.g. `"gpt-5"`,
-`"anthropic/claude-3-7-sonnet-latest"`, `"gemini/gemini-2.5-pro"`,
-`"bedrock/anthropic.claude-3-5-sonnet-..."`, `"ollama/llama3.2"`.
-
-The same `on_text` streaming contract holds — when `on_text` is set the
-impl uses `stream=True` and emits per-chunk deltas; otherwise it does a
-single `acompletion`. Costs come from LiteLLM's `_hidden_params.response_cost`,
-which may be `None` for streamed runs on some providers.
-
-### `context.py` — `build_context()`
-
-The pre-packer. For each call it produces a `PackedContext` with:
-
-- **Context files** — the *explicit* files the domain config declared as
-  `context_files` (CLAUDE.md, README, design docs, etc.). Each is read, UTF-8
-  decoded with `errors="replace"`, and individually trimmed if it would blow
-  the byte budget (`max_bytes` defaults to 80 KB). Path traversal is rejected
-  by checking `path.relative_to(repo_root)`.
-- **Directory tree** — `git ls-files` filtered to the domain's path globs
-  (`packages/cli/**`-style patterns supported), truncated to
-  `max_tree_entries` (default 200). The model gets a flat list of in-scope
-  files, not their contents.
-
-What's deliberately *not* included: arbitrary file contents under
-`domain.paths`. That keeps prompts predictable and cheap; the user opts into
-file contents one path at a time via `domain.context_files`. See
-[ADR 0005 — No RAG, tool use and explicit context](../adr/0005-no-rag-tool-use-and-explicit-context.md)
-for the longer reasoning.
+> There used to be two more files here — `litellm.py` (one-shot
+> completions via LiteLLM) and `context.py` (the pre-packed repo context
+> non-browsing models needed). Both were removed with ADR 0002's
+> amendment; `domain.context_files` survives in `domains.yaml` as
+> curation metadata (see
+> [ADR 0005](../adr/0005-no-rag-tool-use-and-explicit-context.md)).
 
 ### `clarify_parser.py` and `decompose_parser.py`
 
@@ -306,8 +272,9 @@ Each module exports a `VERSION` string and `system_prompt(...)` /
   behavioral changes back to the prompt commit.
 - **System prompts take a `can_browse: bool`.** When `True`, the architect
   is told it may Read/Grep/Glob; when `False`, it's told context has been
-  pre-packed and not to ask for more. `ClaudeArchitect` passes `True`;
-  `LiteLLMArchitect` passes `False`.
+  pre-packed and not to ask for more. `ClaudeArchitect` always passes
+  `True`; the `False` path is currently unused (it existed for the removed
+  LiteLLM architect and is kept for any future non-browsing provider).
 - **Output format is pinned in the system prompt.** The clarify and
   decompose prompts demand a single fenced ```yaml block; the matching
   parser regex (`r"```ya?ml\s*\n(.*?)\n```"`) is the contract.

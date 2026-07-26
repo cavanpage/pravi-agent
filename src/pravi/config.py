@@ -37,8 +37,10 @@ class Settings(BaseSettings):
     sandbox_backend: Literal["local"] = "local"
     log_level: str = "INFO"
 
-    # Architect-agent provider + budgets.
-    architect_provider: Literal["claude", "litellm"] = "claude"
+    # Architect-agent provider + budgets. Claude-only (like the dev agent)
+    # since ADR 0002's LiteLLM path was dropped — the Literal is the seam
+    # for re-adding a provider later.
+    architect_provider: Literal["claude"] = "claude"
     # `architect_model` is the default for every architect mode. Each mode
     # (clarify, decompose, draft) has its own optional override below — set
     # one to pin a specific model for that mode and leave the others on the
@@ -79,9 +81,7 @@ class Settings(BaseSettings):
     # without a console.anthropic.com API account.
     anthropic_api_key: str | None = Field(
         default=None,
-        validation_alias=AliasChoices(
-            "ANTHROPIC_API_KEY", "PRAVI_ANTHROPIC_API_KEY"
-        ),
+        validation_alias=AliasChoices("ANTHROPIC_API_KEY", "PRAVI_ANTHROPIC_API_KEY"),
     )
 
     # Web UI base URL (used by the CLI to print clickable links after starting
@@ -95,9 +95,7 @@ class Settings(BaseSettings):
     # (or whatever matches github_oauth_redirect_uri below).
     github_oauth_client_id: str | None = None
     github_oauth_client_secret: str | None = None
-    github_oauth_redirect_uri: str = (
-        "http://localhost:8765/api/auth/github/callback"
-    )
+    github_oauth_redirect_uri: str = "http://localhost:8765/api/auth/github/callback"
     # Scopes requested. `repo` is needed to push branches + open PRs on
     # private repos; for public-only use `public_repo`.
     github_oauth_scopes: str = "repo,read:user"

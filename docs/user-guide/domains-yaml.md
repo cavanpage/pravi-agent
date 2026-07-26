@@ -32,7 +32,7 @@ domains:
 | `description` | no | One-liner shown to the agents ("what is this domain for"). |
 | `test` | no | Shell command that proves the domain still works. The dev agent runs it before declaring a task done; `pravi ticket run` uses it as the default smoke command. |
 | `build` | no | Shell command to build the domain, when that's distinct from `test`. |
-| `context_files` | no | Repo-relative files whose *contents* are pre-packed into the architect's context (and listed for the dev agent). Pick the few files that explain the domain — a README, the main entry point, a schema. |
+| `context_files` | no | Repo-relative files that best explain the domain — a README, the main entry point, a schema. Curation metadata: the Claude architect explores the repo with its own Read/Grep tools, so today this list is advisory (it rides along on agent requests for future prompt use). |
 
 Validation happens at load time (`src/pravi/domains/registry.py`,
 pydantic-backed): a missing file, an empty `domains:` list, a non-slug name,
@@ -46,11 +46,11 @@ duplicate names, or an empty `paths` list all fail fast with a clear error.
   stay within those globs (`src/pravi/prompts/developer.py`). Scoping is
   prompt-level today — there is no filesystem jail — which is also why
   worktrees + human PR review remain the backstop.
-- **Architect context.** Rather than RAG, pravi pre-packs *deterministic*
-  context (see [ADR 0005](../adr/0005-no-rag-tool-use-and-explicit-context.md)):
-  the contents of `context_files` plus a directory tree of the domain's
-  `paths`. Keep `context_files` short and high-signal — it's opt-in context,
-  not a search index.
+- **Architect context.** Rather than RAG, pravi relies on *deterministic*
+  retrieval (see [ADR 0005](../adr/0005-no-rag-tool-use-and-explicit-context.md)):
+  the architect browses the repo itself with read-only tools, guided by the
+  domain's `description` and `paths`. Keep `context_files` short and
+  high-signal — it documents where to start, not a search index.
 - **Tests.** `test` is the domain's definition of green. If you leave it out,
   the dev agent has no domain-level check to run and will rely on whatever
   the plan specifies.

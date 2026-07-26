@@ -1,8 +1,21 @@
 # ADR 0002 — LLM-agnostic architect, Claude-only dev
 
-- **Status:** Accepted
+- **Status:** Amended — LiteLLM architect dropped (2026-07-17, see below)
 - **Date:** 2026-05-26
 - **Deciders:** @cavanpage
+
+> **Amendment (2026-07-17).** The "drop the LiteLLM architect" trigger in
+> [When to revisit](#when-to-revisit) fired: nobody ran with
+> `PRAVI_ARCHITECT_PROVIDER=litellm`, and the impl was paying a real tax —
+> a 61 MB dependency, a 480-line parallel implementation
+> (`architects/litellm.py` + the `context.py` pre-pack), and dual-parity
+> pressure on every architect change. Both were removed; `litellm` is no
+> longer a dependency. **Everything now runs on Claude**, and the
+> cheap-planning use case is served *within* Claude by per-mode model pins
+> (`PRAVI_ARCHITECT_{CLARIFY,DECOMPOSE,DRAFT}_MODEL` — clarify defaults to
+> Haiku). The `Architect` Protocol + factory seam remains, so re-adding a
+> provider is "implement the Protocol, add a branch". The body below is
+> kept as the original decision record.
 
 ## Context
 

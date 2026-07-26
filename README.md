@@ -27,9 +27,11 @@ Principles:
 - **Nothing is lost to a closed tab**: every agent kickoff (clarify, decompose,
   plan draft) runs as a backgrounded, DB-persisted job with live progress that
   the UI polls — closing the tab or navigating away never cancels a run.
-- **LLM-agnostic architect**: defaults to Claude via claude-agent-sdk, but the
-  architect can run on any LiteLLM-supported provider. The dev agent is
-  Claude-only (it needs the full tool loop).
+- **All Claude, right-sized per mode**: both agents run on claude-agent-sdk.
+  Cost control comes from per-mode model pins — e.g. Haiku on clarify (the
+  default), a smaller model on decompose/draft via `PRAVI_ARCHITECT_*_MODEL` —
+  rather than from swapping providers. (A LiteLLM architect existed and was
+  dropped; see [ADR 0002](docs/adr/0002-llm-agnostic-architect-claude-only-dev.md).)
 
 ## Capabilities
 
@@ -111,8 +113,7 @@ Principles:
 - [Temporal](https://temporal.io/) for durable workflow orchestration
 - [claude-agent-sdk](https://github.com/anthropics/claude-agent-sdk-python) — the
   dev agent's filesystem-mutating executor (read-only tool subset for the
-  architect)
-- [LiteLLM](https://docs.litellm.ai/) — optional alternative architect backend
+  architect); per-mode model pins keep planning cheap
 - Postgres for app state (SQLAlchemy 2.x async + Alembic)
 - FastAPI + SSE backing a React 18 + TypeScript + Vite + Tailwind UI (React Query)
 - Typer CLI (`pravi`)
@@ -282,7 +283,7 @@ src/pravi/
 ├── agents/
 │   ├── protocols.py     # Architect + DevAgent Protocols, shared dataclasses
 │   ├── factory.py       # get_architect() / get_dev_agent() provider dispatch
-│   ├── architects/      # claude.py, litellm.py, context.py, clarify/decompose parsers
+│   ├── architects/      # claude.py, clarify/decompose parsers
 │   ├── dev/             # claude.py (the only dev-agent impl)
 │   └── sandbox/         # Sandbox Protocol + LocalWorktreeSandbox (ADR 0003)
 ├── services/    # background jobs + integrations: clarification, agent_draft

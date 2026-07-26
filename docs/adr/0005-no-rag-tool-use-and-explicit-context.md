@@ -4,6 +4,12 @@
 - **Date:** 2026-06-03
 - **Deciders:** @cavanpage
 
+> **Note (2026-07-17):** the LiteLLM architect and its `context.py`
+> pre-pack (retrieval pattern 5 below) were removed with ADR 0002's
+> amendment. The remaining patterns are unchanged; `domain.context_files`
+> stays in `domains.yaml` as curation metadata a future prompt version
+> can surface to the Claude architect.
+
 ## Context
 
 Pravi's agents need external context to do their jobs:
@@ -50,8 +56,8 @@ second. Calling these out so the line stays clear:
    reads parent + grandparent ticket bodies from Postgres at architect
    call time and prepends them into the prompt.
 5. **Pre-packed `context_files`** for the LiteLLM architect path
-   ([agents/architects/context.py](../../src/pravi/agents/architects/context.py))
-   — concatenates user-curated files from `domain.context_files` plus
+   (`agents/architects/context.py`, *since removed — see note above*)
+   — concatenated user-curated files from `domain.context_files` plus
    a 2-deep `git ls-files` tree. Capped at ~80 KB.
 
 None of these involve embeddings, vector storage, or similarity
@@ -195,8 +201,6 @@ deletion cheap.
   tool-use crossing the sandbox boundary is "just file I/O"; RAG
   would need its own crossing.
 - `src/pravi/agents/architects/claude.py` — the SDK tool loop.
-- `src/pravi/agents/architects/context.py` — the LiteLLM pre-pack
-  helper.
 - `src/pravi/activities/db_activity.py::build_ancestral_body` — the
   hierarchical context-merge pattern.
 - `examples/blissful-infra-domains.yaml` — what a curated

@@ -3,8 +3,10 @@
 Today there are two distinct LLM-driven roles in pravi:
 
   * The **architect** drafts a Markdown plan from a ticket. Text in, text out.
-    Multiple providers are supported via the `Architect` Protocol; today
-    `ClaudeArchitect` and `LiteLLMArchitect` implement it.
+    Providers plug in via the `Architect` Protocol; today only
+    `ClaudeArchitect` implements it (a LiteLLM impl existed and was dropped —
+    see ADR 0002's amendment. Per-mode model pins cover the cheap-model
+    use case within Claude).
 
   * The **dev agent** executes the approved plan inside a worktree (file edits,
     bash, optional MCP servers). Today only `ClaudeDevAgent` implements
@@ -12,6 +14,7 @@ Today there are two distinct LLM-driven roles in pravi:
     is a much larger effort and out of scope. The Protocol is here so we have
     a clean place to swap in alternates when there's a concrete reason.
 """
+
 from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
@@ -30,8 +33,9 @@ class ArchitectRequest:
     domain_paths: list[str]
     ticket_title: str
     ticket_body: str
-    # The Domain config snapshot for context-packing (non-Claude architects).
-    # Optional so existing call sites that don't yet pass it keep working.
+    # The domain's `context_files` from domains.yaml. Currently informational
+    # — the Claude architect explores the repo with its own Read/Grep tools —
+    # but kept on the request so a future prompt version can surface it.
     domain_context_files: list[str] = field(default_factory=list)
     # Per-run budgets — defaults come from get_settings() in the factory.
     max_wall_seconds: int = 300
