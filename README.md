@@ -130,7 +130,8 @@ Principles:
   Cloudflare Pages, the persona/stack catalog, and budget ceilings + spend
   views.
 - **[Architecture decision records](docs/adr/README.md)** — the "why" behind
-  Temporal, the LLM-agnostic architect, sandbox seams, personas, and no-RAG.
+  Temporal, the Claude-only agents, sandbox seams, personas, no-RAG, and
+  deploy targets + LLM-app templates.
 - **[LLM shakedown notes](docs/llm-shakedown.md)** — empirical notes from
   exercising the architect/dev loop against real repos.
 

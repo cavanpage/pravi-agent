@@ -11,3 +11,4 @@ ADRs supersede older ones explicitly (status: Superseded by 000N).
 | 0003 | [Sandbox seam, no local mounts](0003-sandbox-seam-no-local-mounts.md)                | Accepted |
 | 0004 | [Agent personas](0004-agent-personas.md)                                             | Accepted |
 | 0005 | [No vector-similarity RAG (deterministic retrieval only)](0005-no-rag-tool-use-and-explicit-context.md) | Accepted |
+| 0006 | [Deploy targets and LLM-app templates](0006-deploy-targets-and-llm-app-templates.md) | Accepted |
