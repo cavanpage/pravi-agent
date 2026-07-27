@@ -56,11 +56,13 @@ Principles:
   ready-for-review by default; set `PRAVI_PR_OPEN_AS_DRAFT=true` for drafts.
 
 **New repo + Cloudflare Pages** (in-UI)
-- Create a brand-new GitHub repo from the header: pravi creates it via the API,
-  pushes an initial commit from a starter template
-  (`src/pravi/templates/` — currently `vite-react-static`, a Vite + React +
-  Tailwind scaffold), and registers it as a pravi repo so you can start epics
-  against it immediately.
+- Create a brand-new GitHub repo from a starter template: pravi creates it via
+  the API, pushes an initial commit, and registers it as a pravi repo so you
+  can start epics against it immediately. Two templates today
+  (`src/pravi/templates/`): `vite-react-static` (Vite + React + Tailwind) and
+  **`llm-chat`** — a working AI chat app whose Pages Function runs a small
+  Llama model on **Workers AI's free tier**, no API keys anywhere
+  (ADR 0006 slice 1).
 - Optionally provision a **Cloudflare Pages** project bound to the new repo —
   Cloudflare then auto-deploys on every push to the default branch. Connect
   Cloudflare by pasting an API token in the UI ("Connect Cloudflare" in the
@@ -295,7 +297,7 @@ src/pravi/
 ├── domains/     # `.builder/domains.yaml` loader
 ├── personas/    # persona + stack catalogs (ADR 0004)
 ├── prompts/     # versioned prompts: architect, clarify, decompose, developer
-├── templates/   # new-repo starter templates (vite-react-static)
+├── templates/   # new-repo starter templates + manifests (vite-react-static, llm-chat)
 ├── db/          # SQLAlchemy models + Alembic migrations
 └── config.py
 

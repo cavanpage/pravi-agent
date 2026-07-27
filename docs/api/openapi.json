@@ -1916,6 +1916,35 @@
         "title": "StartChildrenSkipped",
         "type": "object"
       },
+      "TemplateOut": {
+        "description": "One starter template, for the create-repo modal's picker.\nSourced from the template's `TemplateManifest` (see\n`pravi.templates.manifest`).",
+        "properties": {
+          "deploy_hint": {
+            "title": "Deploy Hint",
+            "type": "string"
+          },
+          "description": {
+            "title": "Description",
+            "type": "string"
+          },
+          "slug": {
+            "title": "Slug",
+            "type": "string"
+          },
+          "title": {
+            "title": "Title",
+            "type": "string"
+          }
+        },
+        "required": [
+          "slug",
+          "title",
+          "description",
+          "deploy_hint"
+        ],
+        "title": "TemplateOut",
+        "type": "object"
+      },
       "TicketBudgetUpdate": {
         "description": "PATCH body for `/api/tickets/{external_id}/budget`.\n\nPass null to clear (revert to inheritance). Cannot be negative.",
         "properties": {
@@ -2504,6 +2533,29 @@
           }
         },
         "summary": "List Repo Issues"
+      }
+    },
+    "/api/auth/github/templates": {
+      "get": {
+        "description": "Starter templates the create-repo modal can pick from. Metadata\ncomes from each template's manifest \u2014 render with a placeholder\nidentity (pure string substitution, negligible cost) and read the\nfields off.",
+        "operationId": "list_templates_api_auth_github_templates_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/TemplateOut"
+                  },
+                  "title": "Response List Templates Api Auth Github Templates Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "List Templates"
       }
     },
     "/api/personas": {

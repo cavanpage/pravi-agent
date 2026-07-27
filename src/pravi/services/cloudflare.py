@@ -20,6 +20,7 @@ authorize Cloudflare's GitHub app on the GH account that owns the repo
 this, the Pages-project-create call succeeds but the source binding
 won't link — every subsequent push won't auto-deploy.
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -149,9 +150,7 @@ async def verify_token(
                 "permission."
             )
         if rv.status_code >= 400:
-            raise RuntimeError(
-                f"cloudflare verify {rv.status_code}: {rv.text[:300]}"
-            )
+            raise RuntimeError(f"cloudflare verify {rv.status_code}: {rv.text[:300]}")
         verify_payload = rv.json().get("result") or {}
         token_id = verify_payload.get("id")
 
@@ -163,9 +162,7 @@ async def verify_token(
             params={"per_page": 50},
         )
         if ra.status_code >= 400:
-            raise RuntimeError(
-                f"cloudflare list-accounts {ra.status_code}: {ra.text[:300]}"
-            )
+            raise RuntimeError(f"cloudflare list-accounts {ra.status_code}: {ra.text[:300]}")
         accounts_payload = ra.json().get("result") or []
 
     accounts = [
@@ -258,6 +255,30 @@ def _to_active(row: CloudflareConnection) -> ActiveCloudflareConnection:
 # ---- Pages API helpers ----------------------------------------------------
 
 
+async def trigger_pages_deployment(*, name: str, branch: str) -> str | None:
+    """Kick a build of `branch` for a git-connected Pages project.
+    Returns the deployment id, or None on failure (logged, not raised —
+    callers treat the first build as best-effort)."""
+    token, account_id = await _require_creds()
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        r = await client.post(
+            f"{_CF_API_BASE}/accounts/{account_id}/pages/projects/{name}/deployments",
+            headers={"Authorization": f"Bearer {token}"},
+            data={"branch": branch},
+        )
+    if r.status_code >= 400:
+        log.warning(
+            "cloudflare.pages_deploy_trigger_failed",
+            name=name,
+            status=r.status_code,
+            body=r.text[:200],
+        )
+        return None
+    dep_id = (r.json().get("result") or {}).get("id")
+    log.info("cloudflare.pages_deploy_triggered", name=name, deployment_id=dep_id)
+    return dep_id
+
+
 async def pages_project_exists(name: str) -> bool:
     """Cheap availability check — Pages project names are unique per
     account and become subdomains. Used by the create-repo modal to
@@ -272,9 +293,7 @@ async def pages_project_exists(name: str) -> bool:
         return False
     if r.status_code == 200:
         return True
-    log.warning(
-        "cloudflare.pages_check_failed", status=r.status_code, body=r.text[:200]
-    )
+    log.warning("cloudflare.pages_check_failed", status=r.status_code, body=r.text[:200])
     return False
 
 
@@ -327,14 +346,22 @@ async def create_pages_project(
             json=payload,
         )
     if r.status_code >= 400:
-        raise RuntimeError(
-            f"cloudflare create_pages_project {r.status_code}: {r.text[:400]}"
-        )
+        raise RuntimeError(f"cloudflare create_pages_project {r.status_code}: {r.text[:400]}")
     result = r.json().get("result") or {}
     project_name = result.get("name", name)
     subdomain = result.get("subdomain") or f"{project_name}.pages.dev"
-    canonical = result.get("canonical_deployment", {}).get("aliases") or []
+    # Fresh projects return an explicit `"canonical_deployment": null`,
+    # which .get(..., {}) does NOT default away — guard the None.
+    canonical = (result.get("canonical_deployment") or {}).get("aliases") or []
     canonical_url = canonical[0] if canonical else None
+    # The create-repo flow pushes the initial commit BEFORE this project
+    # exists, so the git webhook never fires for it — without an explicit
+    # kick, the first build only happens on the next push. Best-effort:
+    # a failed trigger still leaves a working project.
+    try:
+        await trigger_pages_deployment(name=project_name, branch=production_branch)
+    except Exception:
+        log.warning("cloudflare.pages_initial_deploy_trigger_failed", name=project_name)
     log.info(
         "cloudflare.pages_project_created",
         name=project_name,

@@ -1,7 +1,7 @@
 import { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
-import { api, CreateRepoResult, GitHubRepoResult } from "../lib/api";
+import { api, CreateRepoResult, GitHubRepoResult, TemplateInfo } from "../lib/api";
 import { CloudflareConnectModal } from "./CloudflareConnectModal";
 
 /** Modal for the "create new repo + template + (optional) Cloudflare
@@ -31,6 +31,7 @@ export function CreateRepoModal({
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
   const [isPrivate, setIsPrivate] = useState(defaultPrivate);
+  const [template, setTemplate] = useState("vite-react-static");
   const [deployToPages, setDeployToPages] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [showCfConnect, setShowCfConnect] = useState(false);
@@ -42,6 +43,13 @@ export function CreateRepoModal({
   });
   const cfConfigured = integrationsQ.data?.cloudflare.configured ?? false;
 
+  // If the query fails, the default slug still submits fine.
+  const templatesQ = useQuery({
+    queryKey: ["templates"],
+    queryFn: () => api.templates(),
+    staleTime: 60_000,
+  });
+
   // Live-slugged name for the Pages subdomain preview.
   const slug = useMemo(() => slugify(name), [name]);
 
@@ -51,7 +59,7 @@ export function CreateRepoModal({
         name: slug,
         description,
         private: isPrivate,
-        template: "vite-react-static",
+        template,
         deploy_to_cloudflare_pages: deployToPages && cfConfigured,
         register_in_pravi: true,
       }),
@@ -87,7 +95,7 @@ export function CreateRepoModal({
             <p className="text-xs text-neutral-500 mt-1">
               {result
                 ? "Scaffolded from a template. Use it right away — start an epic against it below."
-                : "Scaffolds a Vite + React + Tailwind starter and (optionally) wires it up to Cloudflare Pages for auto-deploy on every push."}
+                : "Scaffolds a starter from the template you pick and (optionally) wires it up to Cloudflare Pages for auto-deploy on every push."}
             </p>
           </div>
           <button
@@ -110,6 +118,9 @@ export function CreateRepoModal({
             setDescription={setDescription}
             isPrivate={isPrivate}
             setIsPrivate={setIsPrivate}
+            template={template}
+            setTemplate={setTemplate}
+            templates={templatesQ.data ?? null}
             deployToPages={deployToPages}
             setDeployToPages={setDeployToPages}
             cfConfigured={cfConfigured}
@@ -175,6 +186,9 @@ function FormPanel(props: {
   setDescription: (v: string) => void;
   isPrivate: boolean;
   setIsPrivate: (v: boolean) => void;
+  template: string;
+  setTemplate: (v: string) => void;
+  templates: TemplateInfo[] | null;
   deployToPages: boolean;
   setDeployToPages: (v: boolean) => void;
   cfConfigured: boolean;
@@ -185,10 +199,13 @@ function FormPanel(props: {
     name, setName, slug,
     description, setDescription,
     isPrivate, setIsPrivate,
+    template, setTemplate, templates,
     deployToPages, setDeployToPages,
     cfConfigured, cfLoading,
     onConnectCloudflare,
   } = props;
+
+  const isAiTemplate = template === "llm-chat";
 
   return (
     <div className="flex flex-col gap-4">
@@ -230,12 +247,50 @@ function FormPanel(props: {
       </Field>
 
       <Field label="Template">
-        <div className="rounded-xl border border-white/10 bg-white/[0.02] px-3.5 py-2.5">
-          <div className="text-sm text-neutral-100">Vite + React + Tailwind</div>
-          <div className="text-[11px] text-neutral-500 mt-0.5">
-            TypeScript starter — builds to <span className="font-mono">dist/</span>, deployable anywhere static.
+        {templates ? (
+          <ul className="rounded-xl border border-white/10 bg-white/[0.02] divide-y divide-white/5 overflow-hidden">
+            {templates.map((t) => {
+              const picked = t.slug === template;
+              return (
+                <li key={t.slug}>
+                  <button
+                    type="button"
+                    onClick={() => setTemplate(t.slug)}
+                    className={`w-full text-left px-3.5 py-2.5 flex items-start gap-3 transition ${
+                      picked ? "bg-emerald-400/[0.08]" : "hover:bg-white/[0.03]"
+                    }`}
+                  >
+                    <span
+                      className={`mt-1 inline-flex size-4 shrink-0 rounded-full border ${
+                        picked
+                          ? "border-emerald-400 bg-emerald-400"
+                          : "border-white/20"
+                      }`}
+                    />
+                    <span className="min-w-0">
+                      <span className="block text-sm text-neutral-100">
+                        {t.title}
+                      </span>
+                      <span className="block text-[11px] text-neutral-500 mt-0.5">
+                        {t.description}
+                      </span>
+                      <span className="block text-[11px] text-emerald-300/80 mt-0.5 font-mono">
+                        {t.deploy_hint}
+                      </span>
+                    </span>
+                  </button>
+                </li>
+              );
+            })}
+          </ul>
+        ) : (
+          <div className="rounded-xl border border-white/10 bg-white/[0.02] px-3.5 py-2.5">
+            <div className="text-sm text-neutral-100">Vite + React + Tailwind</div>
+            <div className="text-[11px] text-neutral-500 mt-0.5">
+              TypeScript starter — builds to <span className="font-mono">dist/</span>, deployable anywhere static.
+            </div>
           </div>
-        </div>
+        )}
       </Field>
 
       <Field
@@ -244,7 +299,9 @@ function FormPanel(props: {
           cfLoading
             ? "checking integration status…"
             : cfConfigured
-              ? "Connects the repo to a Pages project — auto-deploys every push to main. Your site lands at https://<name>.pages.dev."
+              ? isAiTemplate
+                ? "Connects the repo to a Pages project — auto-deploys every push to main. The chat's AI runs on Workers AI's free tier — no API keys."
+                : "Connects the repo to a Pages project — auto-deploys every push to main. Your site lands at https://<name>.pages.dev."
               : undefined
         }
       >

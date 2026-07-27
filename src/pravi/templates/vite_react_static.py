@@ -7,7 +7,10 @@ config so pravi's decompose / dev / PR flows just work against it.
 The README walks the user through both `wrangler` and dashboard-based
 Pages deploy paths in case they didn't opt into Pages at create time.
 """
+
 from __future__ import annotations
+
+from pravi.templates.manifest import DeploySpec, TemplateManifest, render_files
 
 _PACKAGE_JSON = """\
 {
@@ -217,17 +220,9 @@ Build output is plain `dist/` — point any static host at it.
 """
 
 
-def _substitute(content: str, *, project_name: str, repo_full_name: str) -> str:
-    """Substitute the per-repo placeholders into a template file."""
-    return content.replace("%PROJECT_NAME%", project_name).replace(
-        "%REPO_FULL_NAME%", repo_full_name
-    )
-
-
-def render(*, project_name: str, repo_full_name: str) -> dict[str, str]:
-    """Return the file map (relative path → content) for a fresh
-    repo with the given identity. Used by the create-repo flow to seed
-    the initial commit."""
+def render(*, project_name: str, repo_full_name: str) -> TemplateManifest:
+    """Manifest for a fresh repo with the given identity. Used by the
+    create-repo flow to seed the initial commit + Pages build config."""
     raw = {
         "package.json": _PACKAGE_JSON,
         "vite.config.ts": _VITE_CONFIG,
@@ -241,21 +236,15 @@ def render(*, project_name: str, repo_full_name: str) -> dict[str, str]:
         ".builder/domains.yaml": _DOMAINS_YAML,
         "README.md": _README,
     }
-    return {
-        path: _substitute(
-            content, project_name=project_name, repo_full_name=repo_full_name
-        )
-        for path, content in raw.items()
-    }
+    return TemplateManifest(
+        slug="vite-react-static",
+        title="Vite + React + Tailwind",
+        description=("TypeScript starter — builds to dist/, deployable anywhere static."),
+        build_command="npm run build",
+        destination_dir="dist",
+        files=render_files(raw, project_name=project_name, repo_full_name=repo_full_name),
+        deploy=DeploySpec(pages=True),
+    )
 
 
-# `ALL_TEMPLATES` (in the parent module) expects a plain `FILES` dict
-# without per-call substitution. We keep `render(...)` as the
-# substituting entry point and expose a generic placeholder map under
-# `FILES` for any callers that don't need substitution.
-FILES: dict[str, str] = render(
-    project_name="%PROJECT_NAME%", repo_full_name="%REPO_FULL_NAME%"
-)
-
-
-__all__ = ["FILES", "render"]
+__all__ = ["render"]

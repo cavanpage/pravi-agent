@@ -1,5 +1,6 @@
 """Pydantic models that go over the wire. Kept separate from db.models on
 purpose — the DB schema is internal, the API shape is a contract."""
+
 from __future__ import annotations
 
 from datetime import datetime
@@ -413,6 +414,19 @@ class GitHubIssueRef(BaseModel):
     name: str
     number: int
     html_url: str | None = None
+
+
+class TemplateOut(BaseModel):
+    """One starter template, for the create-repo modal's picker.
+    Sourced from the template's `TemplateManifest` (see
+    `pravi.templates.manifest`)."""
+
+    slug: str
+    title: str
+    description: str
+    # Human-readable deploy summary, e.g. "Cloudflare Pages + Workers AI
+    # (free tier)" — picker card subtitle, not machine-parsed.
+    deploy_hint: str
 
 
 class CreateRepoRequest(BaseModel):

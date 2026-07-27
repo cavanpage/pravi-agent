@@ -345,9 +345,17 @@ export interface CreateRepoInput {
   name: string;
   description?: string;
   private?: boolean;
-  template?: "vite-react-static";
+  template?: string;
   deploy_to_cloudflare_pages?: boolean;
   register_in_pravi?: boolean;
+}
+
+/** One starter template, from GET /api/auth/github/templates. */
+export interface TemplateInfo {
+  slug: string;
+  title: string;
+  description: string;
+  deploy_hint: string;
 }
 
 export interface PagesProject {
@@ -633,6 +641,9 @@ export const api = {
       method: "POST",
       body: "{}",
     }),
+
+  /** Starter templates the create-repo modal can pick from. */
+  templates: () => jsonReq<TemplateInfo[]>("/api/auth/github/templates"),
 
   /** Create a brand-new GitHub repo, seed with a template, optionally
    * connect to Cloudflare Pages, and register in pravi. */

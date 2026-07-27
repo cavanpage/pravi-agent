@@ -7,6 +7,7 @@ Mounted under /api/auth/github/* by the FastAPI app. The flow:
   3. Server exchanges code → token, persists, redirects user to the home page
   4. UI calls GET /me to render the connected user; POST /logout to revoke
 """
+
 from __future__ import annotations
 
 import structlog
@@ -20,6 +21,7 @@ from pravi.api.schemas import (
     GitHubIssueOut,
     GitHubRepoOut,
     PagesProjectOut,
+    TemplateOut,
 )
 from pravi.config import get_settings
 from pravi.services import github as gh
@@ -55,9 +57,7 @@ async def callback(request: Request) -> RedirectResponse:
 
     err = request.query_params.get("error")
     if err:
-        return RedirectResponse(
-            url=f"{success}?github_auth_error={err}", status_code=302
-        )
+        return RedirectResponse(url=f"{success}?github_auth_error={err}", status_code=302)
     code = request.query_params.get("code")
     state = request.query_params.get("state")
     if not code or not state:
@@ -103,9 +103,7 @@ async def logout() -> dict:
     return {"revoked": revoked}
 
 
-@router.get(
-    "/repos/{owner}/{name}/issues", response_model=list[GitHubIssueOut]
-)
+@router.get("/repos/{owner}/{name}/issues", response_model=list[GitHubIssueOut])
 async def list_repo_issues(
     owner: str, name: str, state: str = "open", labels: str = ""
 ) -> list[GitHubIssueOut]:
@@ -129,11 +127,37 @@ async def list_repo_issues(
             labels=labels,
         )
     except Exception as e:
-        log.exception(
-            "github.list_issues_failed", owner=owner, name=name, error=str(e)
-        )
+        log.exception("github.list_issues_failed", owner=owner, name=name, error=str(e))
         raise HTTPException(status_code=502, detail=f"GitHub issues: {e}") from e
     return [GitHubIssueOut(**it) for it in items]
+
+
+@router.get("/templates", response_model=list[TemplateOut])
+async def list_templates() -> list[TemplateOut]:
+    """Starter templates the create-repo modal can pick from. Metadata
+    comes from each template's manifest — render with a placeholder
+    identity (pure string substitution, negligible cost) and read the
+    fields off."""
+    from pravi.templates import ALL_TEMPLATES
+
+    out: list[TemplateOut] = []
+    for slug, factory in ALL_TEMPLATES.items():
+        m = factory(project_name="example", repo_full_name="owner/example")
+        if m.deploy.ai_binding:
+            hint = "Cloudflare Pages + Workers AI (free tier)"
+        elif m.deploy.pages:
+            hint = f"Cloudflare Pages · {m.build_command} → {m.destination_dir}/"
+        else:
+            hint = f"{m.build_command} → {m.destination_dir}/"
+        out.append(
+            TemplateOut(
+                slug=slug,
+                title=m.title,
+                description=m.description,
+                deploy_hint=hint,
+            )
+        )
+    return out
 
 
 @router.get("/integrations")
@@ -169,7 +193,6 @@ async def create_new_repo(req: CreateRepoRequest) -> CreateRepoResult:
     from pravi.db.session import session_scope as _session_scope
     from pravi.services import cloudflare as cf
     from pravi.templates import ALL_TEMPLATES
-    from pravi.templates.vite_react_static import render as _render_vite
 
     conn = await gh.get_active_connection()
     if conn is None:
@@ -182,8 +205,7 @@ async def create_new_repo(req: CreateRepoRequest) -> CreateRepoResult:
         raise HTTPException(
             status_code=400,
             detail=(
-                f"unknown template {req.template!r}. Available: "
-                f"{sorted(ALL_TEMPLATES.keys())}"
+                f"unknown template {req.template!r}. Available: {sorted(ALL_TEMPLATES.keys())}"
             ),
         )
 
@@ -213,11 +235,10 @@ async def create_new_repo(req: CreateRepoRequest) -> CreateRepoResult:
     default_branch = repo_payload.get("default_branch") or "main"
     repo_full_name = repo_payload.get("full_name") or f"{owner}/{name}"
 
-    # 2) Push the initial commit with the template files.
-    if req.template == "vite-react-static":
-        files = _render_vite(project_name=name, repo_full_name=repo_full_name)
-    else:
-        files = ALL_TEMPLATES[req.template]
+    # 2) Push the initial commit with the template files. The manifest
+    #    also carries the build/deploy config the Pages leg needs.
+    manifest = ALL_TEMPLATES[req.template](project_name=name, repo_full_name=repo_full_name)
+    files = manifest.files
 
     commit_pushed = False
     try:
@@ -252,6 +273,8 @@ async def create_new_repo(req: CreateRepoRequest) -> CreateRepoResult:
             )
         elif not commit_pushed:
             pages_skipped = "initial commit didn't land — skipped Pages project"
+        elif not manifest.deploy.pages:
+            pages_skipped = f"template {req.template!r} doesn't deploy to Pages"
         else:
             try:
                 pages_info = await cf.create_pages_project(
@@ -259,10 +282,8 @@ async def create_new_repo(req: CreateRepoRequest) -> CreateRepoResult:
                     github_owner=owner,
                     github_repo=name,
                     production_branch=default_branch,
-                    # Vite/React template's build settings — when more
-                    # templates land we'll map this from the template.
-                    build_command="npm run build",
-                    destination_dir="dist",
+                    build_command=manifest.build_command,
+                    destination_dir=manifest.destination_dir,
                 )
                 pages_out = PagesProjectOut(
                     name=pages_info.name,
@@ -284,9 +305,7 @@ async def create_new_repo(req: CreateRepoRequest) -> CreateRepoResult:
     pravi_repo_id: int | None = None
     if req.register_in_pravi and commit_pushed:
         try:
-            clone_url = repo_payload.get("clone_url") or (
-                f"https://github.com/{owner}/{name}.git"
-            )
+            clone_url = repo_payload.get("clone_url") or (f"https://github.com/{owner}/{name}.git")
             settings = _get_settings()
             target = await gh.ensure_repo_cloned(
                 owner=owner,

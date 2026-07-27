@@ -20,7 +20,7 @@ From the UI, the create-repo modal drives `POST /api/auth/github/repos/new`
 | `name` | — | Repo name on your GitHub account. 409 if taken. |
 | `description` | `""` | GitHub repo description. |
 | `private` | `true` | Repo visibility. |
-| `template` | `vite-react-static` | Starter template from `src/pravi/templates/` (`ALL_TEMPLATES`). Currently the one template: Vite + React + TS + Tailwind, including a ready-made `.builder/domains.yaml` with a single `frontend` domain. |
+| `template` | `vite-react-static` | Starter template slug from `src/pravi/templates/` (`ALL_TEMPLATES`); the modal's picker is fed by `GET /api/auth/github/templates`. See the template table below. |
 | `deploy_to_cloudflare_pages` | `false` | Also create a Cloudflare Pages project bound to the repo. |
 | `register_in_pravi` | `true` | Clone locally + insert a pravi `Repo` row so tickets can target it right away. |
 
@@ -30,10 +30,35 @@ Steps, in order:
 2. **Push the initial commit** — pravi renders the template files (project
    name substituted) in a temp checkout and pushes to the default branch.
 3. **Cloudflare Pages** (optional) — create a Pages project named after the
-   repo, git-connected so Cloudflare builds + deploys every push
-   (`npm run build` → `dist/`, matching the Vite template). The site comes up
-   at `https://<name>.pages.dev`.
+   repo, git-connected so Cloudflare builds + deploys every push. Build
+   settings come from the template's manifest
+   (`src/pravi/templates/manifest.py` — `TemplateManifest.build_command` /
+   `destination_dir`). Because the initial commit predates the project,
+   pravi explicitly triggers the first build after creating it. The site
+   comes up at `https://<name>.pages.dev`.
 4. **Register in pravi** (optional) — lazy-clone + `Repo` row.
+
+## Templates
+
+| Slug | What you get | Deploys as |
+|---|---|---|
+| `vite-react-static` | Vite + React + TS + Tailwind starter with a single `frontend` domain in `.builder/domains.yaml`. | Static Pages site (`npm run build` → `dist/`). |
+| `llm-chat` | The same stack plus a chat UI and a Pages Function (`functions/api/chat.ts`) calling **Workers AI** through an `AI` binding. Two domains: `frontend` + `api`. | Pages site + Function; the committed `wrangler.toml` (`pages_build_output_dir` + `[ai] binding = "AI"`) provisions the AI binding during the git build — no extra Cloudflare setup, no API keys in the app. |
+
+### About `llm-chat`
+
+- Inference runs on a small Llama model (pinned in `functions/api/chat.ts`,
+  one-line swap) under **Workers AI's free tier** — 10,000 neurons/day per
+  account, shared across all your apps, resets 00:00 UTC. When the quota is
+  exhausted the Function returns 429 and the UI shows a "try again
+  tomorrow" banner instead of breaking.
+- Verified end-to-end 2026-07-26: a Pages-Edit-scoped token is enough to
+  create the project and trigger the build; the git build reads
+  `wrangler.toml`, compiles `functions/`, and wires the binding with no
+  extra permissions.
+- Local dev: `npm run dev` serves the UI only (`/api/chat` 404s);
+  `npm run build && npx wrangler pages dev dist` runs the Function against
+  your own `wrangler login` session.
 
 The response (`CreateRepoResult`) reports each leg separately —
 `initial_commit_pushed`, `pages` / `pages_skipped_reason`, `pravi_repo_id` —
