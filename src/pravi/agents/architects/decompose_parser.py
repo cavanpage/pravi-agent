@@ -11,6 +11,7 @@ import re
 import yaml
 
 from pravi.agents.protocols import DecomposedFeature, DecomposedTask
+from pravi.specs.acceptance import MAX_CRITERIA
 
 _FENCED_YAML = re.compile(r"```ya?ml\s*\n(.*?)\n```", re.DOTALL | re.IGNORECASE)
 
@@ -22,6 +23,33 @@ def _coerce_optional_str(v: object) -> str | None:
         return None
     s = str(v).strip()
     return s or None
+
+
+def _coerce_acceptance(v: object, *, where: str, errors: list[str]) -> list[str]:
+    """Normalize a task's `acceptance` to a list of non-empty strings.
+
+    Tolerant in the same spirit as the rest of this parser: a bare string
+    becomes a one-item list rather than an error, since that's a common
+    near-miss. A mapping or number is a real schema mistake and is
+    reported. Capped at MAX_CRITERIA — more than that and the dev agent is
+    writing a test suite, not verifying a task.
+    """
+    if v is None:
+        return []
+    if isinstance(v, str):
+        v = [v]
+    if not isinstance(v, list):
+        errors.append(f"{where}.acceptance must be a list of strings")
+        return []
+    out: list[str] = []
+    for item in v:
+        if isinstance(item, (dict, list)):
+            errors.append(f"{where}.acceptance entries must be strings")
+            continue
+        s = str(item or "").strip()
+        if s:
+            out.append(s)
+    return out[:MAX_CRITERIA]
 
 
 def parse_decomposition(raw_md: str) -> tuple[list[DecomposedFeature], list[str]]:
@@ -87,12 +115,18 @@ def parse_decomposition(raw_md: str) -> tuple[list[DecomposedFeature], list[str]
                 errors.append(f"features[{i}].tasks[{j}].title is required")
                 continue
             t_desc = str(t.get("description") or "").strip()
+            acceptance = _coerce_acceptance(
+                t.get("acceptance"),
+                where=f"features[{i}].tasks[{j}]",
+                errors=errors,
+            )
             tasks.append(
                 DecomposedTask(
                     title=t_title,
                     description=t_desc,
                     persona=_coerce_optional_str(t.get("persona")),
                     stack=_coerce_optional_str(t.get("stack")),
+                    acceptance=acceptance,
                 )
             )
         if tasks:

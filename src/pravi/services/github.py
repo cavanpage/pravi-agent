@@ -550,6 +550,47 @@ async def add_labels_to_issue(
         )
 
 
+async def find_open_pull_request(
+    access_token: str,
+    *,
+    owner: str,
+    repo: str,
+    head_branch: str,
+) -> dict[str, Any] | None:
+    """The open PR whose head is `head_branch`, or None.
+
+    Makes PR-opening idempotent: without this, a retried `open_pr` 422s
+    with "A pull request already exists for this head" (ADR 0007).
+    """
+    url = f"https://api.github.com/repos/{owner}/{repo}/pulls"
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        r = await client.get(
+            url,
+            headers={
+                "Authorization": f"Bearer {access_token}",
+                "Accept": "application/vnd.github+json",
+                "X-GitHub-Api-Version": "2022-11-28",
+            },
+            # GitHub wants `head` qualified by owner for cross-fork safety.
+            params={"head": f"{owner}:{head_branch}", "state": "open", "per_page": 1},
+        )
+    if r.status_code >= 400:
+        # Not fatal — the caller falls through to creating one, and a real
+        # duplicate surfaces as a 422 there.
+        log.warning(
+            "github.find_pr_failed",
+            owner=owner,
+            repo=repo,
+            head=head_branch,
+            status=r.status_code,
+        )
+        return None
+    results = r.json()
+    if isinstance(results, list) and results:
+        return results[0]
+    return None
+
+
 async def create_pull_request(
     access_token: str,
     *,

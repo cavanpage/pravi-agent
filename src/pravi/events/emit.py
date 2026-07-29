@@ -14,9 +14,21 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from pravi.db.models import Event
 
-# Lifecycle sentinels — the SSE handler closes the stream on RUN_FINISHED.
+# Lifecycle sentinels — the SSE handler closes the stream on a RUN_FINISHED
+# whose payload says it's terminal. Mid-loop dev runs emit RUN_FINISHED with
+# `terminal: false` so the panel stays open across repair iterations
+# (ADR 0007); events written before that flag existed default to terminal.
 KIND_RUN_STARTED = "run_started"
 KIND_RUN_FINISHED = "run_finished"
+
+# Deploy + e2e telemetry (ADR 0007). Deliberately NOT run_finished — an
+# e2e run must never be able to close the live stream mid-loop.
+KIND_PREVIEW_WAITING = "preview_waiting"  # {stage, status, poll}
+KIND_PREVIEW_READY = "preview_ready"  # {url, deployment_id, matched_by}
+KIND_PREVIEW_FAILED = "preview_failed"  # {stage, status, error}
+KIND_E2E_STARTED = "e2e_started"  # {base_url, attempt}
+KIND_E2E_FINISHED = "e2e_finished"  # {passed, total, failed, failures[]}
+KIND_REPAIR_STARTED = "repair_started"  # {attempt, max_attempts, reason}
 
 
 def channel_for_ticket(ticket_id: int) -> str:

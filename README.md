@@ -6,7 +6,9 @@ Agentic feature builder for domain-driven repos, powered by Claude.
 template, with optional Cloudflare Pages deploy), browse its issues, decompose
 an epic into a dependency-aware feature/task tree, let the architect draft
 plans (or import work straight from an issue), then have a Claude dev agent
-build it in an isolated worktree and open a PR — all from a React UI.
+build it in an isolated worktree, deploy the branch to an ephemeral preview,
+verify the acceptance criteria with Playwright against that live URL, and open
+a PR — all from a React UI.
 
 ## What it is
 
@@ -16,7 +18,12 @@ build it in an isolated worktree and open a PR — all from a React UI.
    epic into features + tasks, and drafts per-task implementation plans.
 2. **Build** — a Claude dev agent (claude-agent-sdk) executes the approved plan
    inside a per-ticket git worktree, runs domain tests, and pushes a PR.
-3. **Review** — a human reviews the plan up front and the PR at the end.
+3. **Verify** — when a ticket carries acceptance criteria, pravi deploys the
+   branch to an ephemeral Cloudflare Pages preview, runs the agent-authored
+   Playwright specs against that live URL, and feeds any failures back to the
+   dev agent to fix — bounded by an attempt cap and your cost ceiling
+   ([ADR 0007](docs/adr/0007-ephemeral-previews-and-e2e-repair-loop.md)).
+4. **Review** — a human reviews the plan up front and the PR at the end.
 
 Principles:
 
@@ -246,6 +253,14 @@ Per-run hard limits (wall clock, turns, $ budget) for the dev agent come from
    branch and opens a PR (`pr_open`) when commits exist + GitHub is
    connected. PRs open ready-for-review by default
    (`PRAVI_PR_OPEN_AS_DRAFT=true` for drafts).
+5. If the ticket carries acceptance criteria **and** the repo has a `preview:`
+   block in `.builder/domains.yaml`, the workflow then loops: wait for the
+   Cloudflare preview of the pushed commit → run the Playwright suite against
+   it → on failure, feed the failing specs back to the dev agent and repeat
+   (default 3 attempts). The outcome lands on the ticket as `e2e_verdict`
+   (`passed` / `failing` / `build_failed` / `timed_out`), which is a separate
+   axis from `status` — a PR can be open while its tests are red. Without
+   criteria, this step is skipped entirely and step 4 is the end.
 
 Epics and features are organizational containers (no workflow runs); their
 tasks each boot a `FeatureWorkflow` lazily when you start them.

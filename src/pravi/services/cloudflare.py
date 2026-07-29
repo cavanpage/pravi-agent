@@ -23,7 +23,8 @@ won't link — every subsequent push won't auto-deploy.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+import re
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any
 
@@ -60,6 +61,37 @@ class PagesProjectInfo:
 
 
 @dataclass
+class PagesDeployment:
+    """One entry from the Pages deployments list.
+
+    `url` is the per-commit *atomic* URL (`<hash>.<project>.pages.dev`) —
+    that's what the e2e leg tests against, because it's unambiguously the
+    build of one specific SHA. `aliases` carries the branch alias, which
+    races when two branches sanitize to the same label and is therefore
+    display-only.
+    """
+
+    id: str
+    url: str | None = None
+    aliases: list[str] = field(default_factory=list)
+    environment: str | None = None
+    branch: str | None = None
+    commit_hash: str | None = None
+    stage_name: str | None = None  # queued|initialize|clone_repo|build|deploy
+    stage_status: str | None = None  # success|idle|active|failure|canceled
+    created_on: str | None = None
+
+    @property
+    def succeeded(self) -> bool:
+        return self.stage_name == "deploy" and self.stage_status == "success"
+
+    @property
+    def terminal(self) -> bool:
+        """True once this deployment can no longer change outcome."""
+        return self.succeeded or self.stage_status in ("failure", "canceled")
+
+
+@dataclass
 class ActiveCloudflareConnection:
     """In-process snapshot of the active connection. Matches the shape
     of [[ActiveConnection]] in pravi.services.github."""
@@ -70,6 +102,32 @@ class ActiveCloudflareConnection:
     account_name: str | None
     token_id: str | None
     created_at: datetime
+
+
+@dataclass
+class ZoneRef:
+    id: str
+    name: str
+
+
+@dataclass
+class CustomDomainStatus:
+    """A custom domain attached to a Pages project's PRODUCTION deploy.
+
+    Preview deployments always stay on `*.pages.dev` — per-branch custom
+    hostnames need a wildcard-domain setup that isn't a clean API
+    operation (ADR 0007).
+    """
+
+    hostname: str
+    status: str  # initializing|pending|active|deactivated|blocked|error
+    url: str | None = None
+    verification_data: dict[str, Any] | None = None
+    validation_data: dict[str, Any] | None = None
+    dns_configured: bool = False
+    # Why DNS wasn't written, and the exact record to paste instead.
+    dns_skipped_reason: str | None = None
+    manual_dns_record: str | None = None
 
 
 @dataclass
@@ -336,6 +394,13 @@ async def create_pages_project(
                 "pr_comments_enabled": True,
                 "deployments_enabled": True,
                 "production_deployment_enabled": True,
+                # Pin preview builds on. Cloudflare's default is already
+                # "all non-production branches", but leaving it implicit
+                # means a project someone tweaked in the dashboard would
+                # silently produce zero preview deployments — and the e2e
+                # leg would fail with "no deployment appeared" rather than
+                # anything that points at the real cause (ADR 0007).
+                "preview_deployment_setting": "all",
             },
         },
     }
@@ -374,3 +439,368 @@ async def create_pages_project(
         pages_url=f"https://{subdomain}",
         canonical_url=canonical_url,
     )
+
+
+# ---- preview deployments (ADR 0007) --------------------------------------
+
+
+_ANSI_RE = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
+_ALIAS_SANITIZE = re.compile(r"[^a-z0-9]+")
+
+
+def strip_ansi(s: str) -> str:
+    return _ANSI_RE.sub("", s)
+
+
+def pages_branch_alias(branch: str, project: str) -> str:
+    """Cloudflare's branch-alias hostname for a branch.
+
+    Lowercased, every run of non-alphanumerics collapsed to one hyphen,
+    ends trimmed, label capped at the 63-char DNS limit. `fix/api` on
+    project `my-app` → `fix-api.my-app.pages.dev`.
+
+    Informational only: two branches can sanitize to the same label, and
+    the alias always points at the *latest* build for it. Testing targets
+    the per-commit URL instead.
+    """
+    label = _ALIAS_SANITIZE.sub("-", branch.lower()).strip("-")[:63].rstrip("-")
+    return f"{label}.{project}.pages.dev"
+
+
+def _parse_deployment(raw: dict[str, Any]) -> PagesDeployment:
+    stage = raw.get("latest_stage") or {}
+    trigger_meta = (raw.get("deployment_trigger") or {}).get("metadata") or {}
+    return PagesDeployment(
+        id=raw.get("id") or "",
+        url=raw.get("url"),
+        aliases=[a for a in (raw.get("aliases") or []) if a],
+        environment=raw.get("environment"),
+        branch=trigger_meta.get("branch"),
+        commit_hash=trigger_meta.get("commit_hash"),
+        stage_name=stage.get("name"),
+        stage_status=stage.get("status"),
+        created_on=raw.get("created_on"),
+    )
+
+
+def match_deployment_by_commit(
+    deployments: list[PagesDeployment],
+    *,
+    commit_sha: str,
+    branch: str | None = None,
+) -> tuple[PagesDeployment | None, str | None]:
+    """Find the deployment built from `commit_sha`. Returns (dep, matched_by).
+
+    Precedence:
+      1. `commit_hash` prefix-matches the SHA in either direction — some
+         payload versions return an abbreviated hash — case-insensitive.
+         `matched_by="commit"`, the only unambiguous match.
+      2. Newest deployment on the same branch. `matched_by="branch"`. A
+         weaker signal (it could be a *later* push), recorded so callers
+         can tell the difference.
+      3. Nothing.
+
+    Pure — no HTTP — so it's directly unit-testable.
+    """
+    sha = (commit_sha or "").strip().lower()
+    if sha:
+        for dep in deployments:
+            h = (dep.commit_hash or "").strip().lower()
+            if not h:
+                continue
+            if h == sha or sha.startswith(h) or h.startswith(sha):
+                return dep, "commit"
+
+    if branch:
+        on_branch = [d for d in deployments if d.branch == branch]
+        if on_branch:
+            # `created_on` is ISO-8601 UTC, so lexical max is chronological.
+            newest = max(on_branch, key=lambda d: d.created_on or "")
+            return newest, "branch"
+
+    return None, None
+
+
+async def list_preview_deployments(
+    *, project: str, per_page: int = 25, page: int = 1
+) -> list[PagesDeployment]:
+    """Preview-environment deployments for a project, newest first."""
+    token, account_id = await _require_creds()
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        r = await client.get(
+            f"{_CF_API_BASE}/accounts/{account_id}/pages/projects/{project}/deployments",
+            headers=_headers(token),
+            params={"env": "preview", "per_page": per_page, "page": page},
+        )
+    if r.status_code == 404:
+        # Unknown project — not an error here. The caller's grace period
+        # turns this into a specific "check the project name" message.
+        log.warning("cloudflare.pages_project_not_found", project=project)
+        return []
+    if r.status_code >= 400:
+        raise RuntimeError(
+            f"cloudflare list_deployments {r.status_code}: {r.text[:300]}"
+        )
+    return [_parse_deployment(d) for d in (r.json().get("result") or []) if d.get("id")]
+
+
+async def get_deployment_by_commit(
+    *,
+    project: str,
+    commit_sha: str,
+    branch: str | None = None,
+    max_pages: int = 2,
+) -> tuple[PagesDeployment | None, str | None]:
+    """Page through preview deployments looking for one built from `commit_sha`.
+
+    A commit match on page 1 short-circuits. A branch match is held back
+    until every page has been checked, so an exact commit hit on a later
+    page still wins over a weaker branch hit on an earlier one.
+    """
+    fallback: tuple[PagesDeployment | None, str | None] = (None, None)
+    for page in range(1, max_pages + 1):
+        deployments = await list_preview_deployments(project=project, page=page)
+        if not deployments:
+            break
+        dep, matched_by = match_deployment_by_commit(
+            deployments, commit_sha=commit_sha, branch=branch
+        )
+        if matched_by == "commit":
+            return dep, matched_by
+        if matched_by and fallback[0] is None:
+            fallback = (dep, matched_by)
+    return fallback
+
+
+async def get_deployment_logs(
+    *, project: str, deployment_id: str, tail_lines: int = 200
+) -> str:
+    """Last N build-log lines, ANSI-stripped and capped.
+
+    Never raises: the repair loop feeds these to the agent after a failed
+    build, and losing the logs must not also lose the repair attempt. On
+    any failure this returns a `(logs unavailable: …)` marker instead.
+    """
+    try:
+        token, account_id = await _require_creds()
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            r = await client.get(
+                f"{_CF_API_BASE}/accounts/{account_id}/pages/projects/"
+                f"{project}/deployments/{deployment_id}/history/logs",
+                headers=_headers(token),
+            )
+        if r.status_code >= 400:
+            return f"(logs unavailable: HTTP {r.status_code})"
+        result = r.json().get("result") or {}
+        entries = result.get("data") or []
+        lines = [str(e.get("line") or "") for e in entries]
+    except Exception as e:  # noqa: BLE001 — best-effort by contract
+        log.warning(
+            "cloudflare.deployment_logs_failed",
+            project=project,
+            deployment_id=deployment_id,
+            error=str(e),
+        )
+        return f"(logs unavailable: {type(e).__name__}: {e})"
+
+    if not lines:
+        return "(logs unavailable: Cloudflare returned no log lines)"
+    text = strip_ansi("\n".join(lines[-tail_lines:]))
+    return text[-16_000:]
+
+
+# ---- custom domains (ADR 0007) -------------------------------------------
+#
+# Permission contract: registering the domain on the Pages project needs
+# only `Account → Cloudflare Pages → Edit`, which is what the connect modal
+# already asks for. Pointing DNS at it additionally needs `Zone → Read` +
+# `Zone → DNS → Edit`. When those are missing NOTHING here raises — the
+# domain still gets registered (it just sits in `pending` until DNS
+# resolves), and we hand back the exact record for the user to add. A
+# degraded-but-useful outcome beats a hard failure on an optional leg.
+
+
+def _domain_status_from(raw: dict[str, Any], hostname: str) -> CustomDomainStatus:
+    status = raw.get("status") or "unknown"
+    return CustomDomainStatus(
+        hostname=raw.get("name") or hostname,
+        status=status,
+        url=f"https://{raw.get('name') or hostname}",
+        verification_data=raw.get("verification_data"),
+        validation_data=raw.get("validation_data"),
+    )
+
+
+async def attach_custom_domain(*, project: str, hostname: str) -> CustomDomainStatus:
+    """Register `hostname` on a Pages project.
+
+    An "already exists" response is success — the whole flow is meant to
+    be re-runnable.
+    """
+    token, account_id = await _require_creds()
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        r = await client.post(
+            f"{_CF_API_BASE}/accounts/{account_id}/pages/projects/{project}/domains",
+            headers=_headers(token),
+            json={"name": hostname},
+        )
+    if r.status_code < 400:
+        result = r.json().get("result") or {}
+        log.info("cloudflare.custom_domain_attached", project=project, hostname=hostname)
+        return _domain_status_from(result, hostname)
+
+    body = r.text[:400]
+    if r.status_code == 409 or "already" in body.lower():
+        existing = await get_custom_domain(project=project, hostname=hostname)
+        if existing is not None:
+            return existing
+        return CustomDomainStatus(hostname=hostname, status="pending")
+    raise RuntimeError(f"cloudflare attach_custom_domain {r.status_code}: {body}")
+
+
+async def get_custom_domain(
+    *, project: str, hostname: str
+) -> CustomDomainStatus | None:
+    """Current state of one custom domain on a project, or None."""
+    token, account_id = await _require_creds()
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        r = await client.get(
+            f"{_CF_API_BASE}/accounts/{account_id}/pages/projects/{project}/domains",
+            headers=_headers(token),
+        )
+    if r.status_code >= 400:
+        return None
+    for raw in r.json().get("result") or []:
+        if (raw.get("name") or "").lower() == hostname.lower():
+            return _domain_status_from(raw, hostname)
+    return None
+
+
+def _zone_candidates(hostname: str) -> list[str]:
+    """Registrable-zone guesses for a hostname, longest suffix first.
+
+    `app.staging.example.com` → staging.example.com, example.com. Two
+    labels is the shortest thing that can be a zone.
+    """
+    labels = hostname.split(".")
+    return [".".join(labels[i:]) for i in range(len(labels) - 1)]
+
+
+async def find_zone_for_hostname(hostname: str) -> ZoneRef | None:
+    """The Cloudflare zone this hostname belongs to, or None.
+
+    Returns None — never raises — when the token can't read zones, so the
+    caller degrades to a manual DNS instruction.
+    """
+    try:
+        token, _account_id = await _require_creds()
+    except CloudflareNotConfigured:
+        return None
+    async with httpx.AsyncClient(timeout=15.0) as client:
+        for candidate in _zone_candidates(hostname):
+            r = await client.get(
+                f"{_CF_API_BASE}/zones",
+                headers=_headers(token),
+                params={"name": candidate},
+            )
+            if r.status_code in (401, 403):
+                log.info("cloudflare.zone_lookup_forbidden", hostname=hostname)
+                return None
+            if r.status_code >= 400:
+                continue
+            for z in r.json().get("result") or []:
+                if z.get("id"):
+                    return ZoneRef(id=z["id"], name=z.get("name") or candidate)
+    return None
+
+
+async def ensure_cname(
+    *, zone_id: str, hostname: str, target: str, proxied: bool = True
+) -> tuple[bool, str | None]:
+    """Point `hostname` at `target` with a proxied CNAME.
+
+    Idempotent: an existing CNAME to the same target is a no-op success.
+    Returns (ok, skipped_reason); never raises on a permission problem.
+    """
+    try:
+        token, _account_id = await _require_creds()
+    except CloudflareNotConfigured as e:
+        return False, str(e)
+
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        existing = await client.get(
+            f"{_CF_API_BASE}/zones/{zone_id}/dns_records",
+            headers=_headers(token),
+            params={"name": hostname},
+        )
+        if existing.status_code in (401, 403):
+            return False, _DNS_SCOPE_HINT
+        if existing.status_code < 400:
+            for rec in existing.json().get("result") or []:
+                if rec.get("type") == "CNAME" and (rec.get("content") or "").rstrip(
+                    "."
+                ) == target.rstrip("."):
+                    log.info("cloudflare.cname_already_set", hostname=hostname)
+                    return True, None
+
+        r = await client.post(
+            f"{_CF_API_BASE}/zones/{zone_id}/dns_records",
+            headers=_headers(token),
+            json={
+                "type": "CNAME",
+                "name": hostname,
+                "content": target,
+                "proxied": proxied,
+                "comment": "created by pravi for a Cloudflare Pages custom domain",
+            },
+        )
+    if r.status_code in (401, 403):
+        return False, _DNS_SCOPE_HINT
+    if r.status_code >= 400:
+        return False, f"could not create the DNS record: {r.text[:300]}"
+    log.info("cloudflare.cname_created", hostname=hostname, target=target)
+    return True, None
+
+
+_DNS_SCOPE_HINT = (
+    "the Cloudflare token lacks Zone:Read + Zone:DNS:Edit, so DNS wasn't "
+    "pointed at the Pages project. The domain is registered and will go "
+    "live once the record below exists — add it yourself, or recreate the "
+    "token with those permissions and retry."
+)
+
+
+async def setup_custom_domain(
+    *, project: str, hostname: str
+) -> CustomDomainStatus:
+    """Register a custom domain AND point DNS at it, best-effort.
+
+    Composes the three calls above. The Pages registration is the part
+    that must work; DNS is opportunistic, and when it can't be written the
+    result carries a copy-pasteable record instead.
+    """
+    status = await attach_custom_domain(project=project, hostname=hostname)
+    target = f"{project}.pages.dev"
+
+    zone = await find_zone_for_hostname(hostname)
+    if zone is None:
+        status.dns_skipped_reason = (
+            f"no Cloudflare zone found for {hostname!r}, or the token cannot "
+            f"read zones. {_DNS_SCOPE_HINT}"
+        )
+    else:
+        ok, reason = await ensure_cname(
+            zone_id=zone.id, hostname=hostname, target=target
+        )
+        status.dns_configured = ok
+        status.dns_skipped_reason = reason
+
+    if not status.dns_configured:
+        status.manual_dns_record = f"{hostname}  CNAME  {target}  (proxied)"
+    else:
+        # DNS just changed; re-read so the reported status reflects it.
+        refreshed = await get_custom_domain(project=project, hostname=hostname)
+        if refreshed is not None:
+            refreshed.dns_configured = True
+            status = refreshed
+    return status

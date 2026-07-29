@@ -193,7 +193,21 @@ function TokenStep({
             <span className="text-emerald-300">Account</span> · Account Settings
             · Read
           </li>
+          <li>
+            <span className="text-neutral-500">Zone</span> · Zone · Read{" "}
+            <span className="text-neutral-600">(optional)</span>
+          </li>
+          <li>
+            <span className="text-neutral-500">Zone</span> · DNS · Edit{" "}
+            <span className="text-neutral-600">(optional)</span>
+          </li>
         </ul>
+        <p className="text-[11px] text-neutral-500 leading-relaxed">
+          The two <span className="text-neutral-400">Zone</span> permissions are
+          only needed if you want pravi to point a custom domain at the site.
+          Without them everything else still works — you'd just add one DNS
+          record by hand.
+        </p>
         <a
           href={TOKEN_CREATE_URL}
           target="_blank"

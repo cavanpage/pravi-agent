@@ -17,6 +17,7 @@ from fastapi.responses import RedirectResponse
 from pravi.api.schemas import (
     CreateRepoRequest,
     CreateRepoResult,
+    CustomDomainOut,
     GitHubConnectionOut,
     GitHubIssueOut,
     GitHubRepoOut,
@@ -299,6 +300,41 @@ async def create_new_repo(req: CreateRepoRequest) -> CreateRepoResult:
                 )
                 pages_skipped = f"Pages create failed: {type(e).__name__}: {e}"
 
+    # 3b) Custom domain on the production deploy (best-effort, ADR 0007).
+    #     Needs a project to attach to, so it rides on the Pages leg. Like
+    #     that leg, a failure here never fails repo creation.
+    custom_domain_out: CustomDomainOut | None = None
+    custom_domain_skipped: str | None = None
+    if req.custom_domain:
+        if pages_out is None:
+            custom_domain_skipped = (
+                "no Cloudflare Pages project was created, so there's nothing "
+                "to attach a domain to."
+            )
+        else:
+            try:
+                status = await cf.setup_custom_domain(
+                    project=pages_out.name, hostname=req.custom_domain
+                )
+                custom_domain_out = CustomDomainOut(
+                    hostname=status.hostname,
+                    status=status.status,
+                    url=status.url,
+                    dns_configured=status.dns_configured,
+                    dns_skipped_reason=status.dns_skipped_reason,
+                    manual_dns_record=status.manual_dns_record,
+                )
+            except Exception as e:
+                log.warning(
+                    "cloudflare.custom_domain_failed",
+                    name=name,
+                    hostname=req.custom_domain,
+                    error=str(e),
+                )
+                custom_domain_skipped = (
+                    f"custom domain setup failed: {type(e).__name__}: {e}"
+                )
+
     # 4) Register a pravi Repo row so the user can immediately start
     #    epics against it. Lazy-clone is handled by the sandbox the
     #    first time a dev run fires.
@@ -320,6 +356,20 @@ async def create_new_repo(req: CreateRepoRequest) -> CreateRepoResult:
                     local_path=str(_Path(target).resolve()),
                     github_owner=owner,
                     github_name=name,
+                    # Persist the Pages project so the preview leg knows
+                    # where to look for this repo's branch deployments
+                    # (ADR 0007). Step 3 runs before this one, so
+                    # `pages_out` is already resolved.
+                    cf_pages_project=(pages_out.name if pages_out else None),
+                    # Only record a domain that actually got registered —
+                    # a hard error leaves nothing pointing anywhere.
+                    cf_custom_domain=(
+                        custom_domain_out.hostname
+                        if custom_domain_out
+                        and custom_domain_out.status
+                        in ("initializing", "pending", "active")
+                        else None
+                    ),
                 )
                 session.add(row)
                 await session.flush()
@@ -340,6 +390,8 @@ async def create_new_repo(req: CreateRepoRequest) -> CreateRepoResult:
         initial_commit_pushed=commit_pushed,
         pages=pages_out,
         pages_skipped_reason=pages_skipped,
+        custom_domain=custom_domain_out,
+        custom_domain_skipped_reason=custom_domain_skipped,
         pravi_repo_id=pravi_repo_id,
     )
 

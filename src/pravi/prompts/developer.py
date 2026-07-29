@@ -13,8 +13,16 @@ from pravi.personas import (
     get_stack,
 )
 
-# Bumped from dev/v1: now parameterized by (persona, stack) per ADR 0004.
-VERSION = "dev/v2"
+# Bumped from dev/v2: tasks carrying acceptance criteria also ask the agent
+# to author Playwright specs (ADR 0007). Without criteria the prompt is
+# byte-identical to v2 — guarded by a test.
+VERSION = "dev/v3"
+
+# The line replaced when the e2e leg is active. Kept as a constant so the
+# swap can't silently no-op if the base prompt is reworded.
+_NO_TESTS_LINE = (
+    "  - Do not run tests yourself — a separate test step will validate your work."
+)
 
 
 def _persona_block(persona_slug: str | None, stack_slug: str | None) -> str:
@@ -46,6 +54,44 @@ def _persona_block(persona_slug: str | None, stack_slug: str | None) -> str:
     return "\n\n".join(parts)
 
 
+def _e2e_block(
+    criteria: list[str], *, e2e_dir: str, base_url_env: str
+) -> str:
+    # Built after dedent, not interpolated into the template: a line at a
+    # shallower indent than the rest would reset dedent's common prefix and
+    # leave the whole block misindented.
+    numbered = "\n".join(f"  {n}. {c}" for n, c in enumerate(criteria, start=1))
+    body = dedent(
+        f"""
+        ## End-to-end tests (required for this task)
+
+        This task carries acceptance criteria. Alongside your implementation
+        you MUST commit Playwright specs under `{e2e_dir}/` that verify them.
+
+        Rules:
+          - One `test(...)` per acceptance criterion. Name each test with the
+            criterion's own wording, so a failure report reads like the spec.
+          - Navigate relatively: `await page.goto("/settings")`. The base URL
+            comes from `{base_url_env}` via `playwright.config.ts`. NEVER
+            hardcode a hostname, a port, or a `.pages.dev` domain.
+          - Prefer role/label/text locators (`getByRole`, `getByLabel`,
+            `getByText`) over CSS or XPath. When a control has no stable
+            accessible name, add a `data-testid` to the component and use
+            `getByTestId`.
+          - Assert with `await expect(locator).toBeVisible()` and friends —
+            Playwright auto-waits. Do NOT add `waitForTimeout` sleeps.
+          - You CANNOT run these tests here: the app isn't deployed yet and
+            no browsers are installed. Write them, read them back for
+            syntax, and commit them.
+          - If `{e2e_dir}/` already has a spec covering one of these
+            criteria, extend it rather than adding a duplicate file.
+
+        Acceptance criteria for this task:
+        """
+    ).strip()
+    return f"{body}\n{numbered}"
+
+
 def system_prompt(
     *,
     repo_name: str,
@@ -55,6 +101,9 @@ def system_prompt(
     cwd: str,
     persona: str | None = None,
     stack: str | None = None,
+    acceptance_criteria: list[str] | None = None,
+    e2e_dir: str = "e2e",
+    e2e_base_url_env: str = "E2E_BASE_URL",
 ) -> str:
     paths_block = "\n".join(f"  - {p}" for p in domain_paths)
     persona_block = _persona_block(persona, stack)
@@ -88,6 +137,19 @@ def system_prompt(
           - Don't introduce new dependencies unless explicitly asked.
         """
     ).strip()
+
+    criteria = [c.strip() for c in (acceptance_criteria or []) if c and c.strip()]
+    if criteria:
+        # The base prompt tells the agent not to test. That's still true of
+        # *running* them, but it now has to write them — swap the line so
+        # the two instructions don't contradict each other.
+        base = base.replace(
+            _NO_TESTS_LINE,
+            "  - Do not run the test suite yourself. A separate step deploys "
+            "this branch\n    to a preview URL and runs the end-to-end tests "
+            "against it.",
+        )
+        base = f"{base}\n\n{_e2e_block(criteria, e2e_dir=e2e_dir, base_url_env=e2e_base_url_env)}"
 
     if not persona_block:
         return base

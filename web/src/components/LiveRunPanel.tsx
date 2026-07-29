@@ -17,6 +17,13 @@ const KIND_STYLE: Record<string, string> = {
   tool_result: "bg-white/5 text-neutral-400 ring-white/10",
   system: "bg-amber-400/10 text-amber-300 ring-amber-400/20",
   result: "bg-emerald-400/10 text-emerald-300 ring-emerald-400/20",
+  // Deploy → e2e → repair loop (ADR 0007).
+  preview_waiting: "bg-white/5 text-neutral-400 ring-white/10",
+  preview_ready: "bg-emerald-400/10 text-emerald-300 ring-emerald-400/20",
+  preview_failed: "bg-rose-400/10 text-rose-300 ring-rose-400/20",
+  e2e_started: "bg-indigo-400/10 text-indigo-300 ring-indigo-400/20",
+  e2e_finished: "bg-indigo-400/10 text-indigo-300 ring-indigo-400/20",
+  repair_started: "bg-amber-400/10 text-amber-300 ring-amber-400/20",
 };
 
 export function LiveRunPanel({ externalId, maxCostUsd }: Props) {
@@ -46,18 +53,29 @@ export function LiveRunPanel({ externalId, maxCostUsd }: Props) {
   const metrics = useMemo(() => {
     const turns = events.filter((e) => e.kind === "tool_use" || e.kind === "assistant_text").length;
     const toolUses = events.filter((e) => e.kind === "tool_use").length;
-    const finished = events.find((e) => e.kind === "run_finished");
-    const result = events.find((e) => e.kind === "result");
-    const finalCost =
-      ((finished?.payload?.total_cost_usd as number | null | undefined) ??
-        (result?.payload?.total_cost_usd as number | null | undefined)) ??
-      null;
+    // A repair loop (ADR 0007) produces several run_finished events on one
+    // ticket, so take the LAST one — and only treat the run as over when
+    // it says it's terminal. Events written before that flag existed carry
+    // no `terminal` key and default to true.
+    const finishes = events.filter((e) => e.kind === "run_finished");
+    const finished = finishes.length ? finishes[finishes.length - 1] : undefined;
+    const isOver =
+      !!finished && ((finished.payload?.terminal as boolean | undefined) ?? true);
+    const result = events.filter((e) => e.kind === "result").at(-1);
+    // Cost accumulates across every dev run on the ticket, repairs included
+    // — otherwise the meter under-reports what the loop actually spent.
+    const costs = finishes
+      .map((e) => e.payload?.total_cost_usd as number | null | undefined)
+      .filter((c): c is number => typeof c === "number");
+    const finalCost = costs.length
+      ? costs.reduce((a, b) => a + b, 0)
+      : ((result?.payload?.total_cost_usd as number | null | undefined) ?? null);
     const finalTurns =
       ((finished?.payload?.num_turns as number | undefined) ??
         (result?.payload?.num_turns as number | undefined)) ??
       turns;
     const started = events.find((e) => e.kind === "run_started")?.at;
-    const ended = finished?.at;
+    const ended = isOver ? finished?.at : undefined;
     const elapsedMs = started
       ? (ended ? new Date(ended).getTime() : Date.now()) - new Date(started).getTime()
       : 0;
@@ -74,7 +92,7 @@ export function LiveRunPanel({ externalId, maxCostUsd }: Props) {
       toolUses,
       cost: finalCost,
       elapsedMs,
-      finished: !!finished,
+      finished: isOver,
       success,
       failureReason,
       failureMessage,
@@ -243,7 +261,14 @@ function Stat({
 }
 
 function EventRow({ event }: { event: RunEvent }) {
-  const style = KIND_STYLE[event.kind] || "bg-white/5 text-neutral-400 ring-white/10";
+  let style = KIND_STYLE[event.kind] || "bg-white/5 text-neutral-400 ring-white/10";
+  // A finished e2e run is green or red depending on the verdict, not on
+  // the fact that it ran.
+  if (event.kind === "e2e_finished" && event.payload?.passed === false) {
+    style = "bg-rose-400/10 text-rose-300 ring-rose-400/20";
+  } else if (event.kind === "e2e_finished") {
+    style = "bg-emerald-400/10 text-emerald-300 ring-emerald-400/20";
+  }
   return (
     <div className="flex items-start gap-2 text-sm">
       <span

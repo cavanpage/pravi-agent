@@ -15,13 +15,17 @@ Lazy-clone path:
 from __future__ import annotations
 
 import asyncio
+import os
 import shutil
+import time
 from pathlib import Path
 
 import structlog
 
 from pravi.agents.sandbox.protocols import (
     Sandbox,
+    SandboxExecRequest,
+    SandboxExecResult,
     SandboxHandle,
     SandboxProvisionRequest,
 )
@@ -33,19 +37,64 @@ from pravi.services import github as gh
 log = structlog.get_logger(__name__)
 
 
-async def _run(cmd: list[str], cwd: Path | None = None) -> tuple[int, str, str]:
+async def _run_full(
+    cmd: list[str],
+    cwd: Path | None = None,
+    *,
+    env: dict[str, str] | None = None,
+    timeout: float | None = None,
+) -> tuple[int, str, str, bool]:
+    """Run argv and capture both streams. Returns (code, out, err, timed_out).
+
+    `env` is merged over `os.environ` rather than replacing it — a bare env
+    would strip PATH and `npx`/`git` would stop resolving.
+    """
     proc = await asyncio.create_subprocess_exec(
         *cmd,
         cwd=str(cwd) if cwd else None,
+        env={**os.environ, **env} if env else None,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
     )
-    out_b, err_b = await proc.communicate()
+    try:
+        out_b, err_b = await asyncio.wait_for(proc.communicate(), timeout=timeout)
+    except TimeoutError:
+        proc.kill()
+        # Reap it — without this the child lingers and asyncio warns at GC.
+        out_b, err_b = await proc.communicate()
+        return (
+            124,  # conventional timeout exit code
+            out_b.decode("utf-8", "replace"),
+            err_b.decode("utf-8", "replace"),
+            True,
+        )
     return (
         proc.returncode or 0,
         out_b.decode("utf-8", "replace"),
         err_b.decode("utf-8", "replace"),
+        False,
     )
+
+
+async def _run(cmd: list[str], cwd: Path | None = None) -> tuple[int, str, str]:
+    code, out, err, _ = await _run_full(cmd, cwd)
+    return code, out, err
+
+
+def _clamp(s: str, limit: int) -> tuple[str, bool]:
+    """Truncate to `limit` bytes keeping both ends.
+
+    Head *and* tail matter: a Playwright JSON report carries `suites` up
+    front and `stats` at the end, and a build log's useful error is at the
+    tail while its command line is at the head.
+    """
+    raw = s.encode("utf-8", "replace")
+    if len(raw) <= limit:
+        return s, False
+    head = raw[: limit // 4].decode("utf-8", "replace")
+    tail = raw[-(limit - limit // 4) :].decode("utf-8", "replace")
+    elided = len(raw) - limit
+    return f"{head}\n…[{elided} bytes elided]…\n{tail}", True
 
 
 async def _resolve_local_clone(repo_id: int) -> tuple[Path, str | None]:
@@ -151,6 +200,39 @@ class LocalWorktreeSandbox(Sandbox):
             origin_url=origin,
             backend="local",
         )
+
+    async def exec(
+        self, handle: SandboxHandle, req: SandboxExecRequest
+    ) -> SandboxExecResult:
+        target = Path(handle.cwd)
+        if req.cwd_rel:
+            target = target / req.cwd_rel
+        started = time.monotonic()
+        code, out, err, timed_out = await _run_full(
+            req.command,
+            cwd=target,
+            env=req.env or None,
+            timeout=req.timeout_seconds,
+        )
+        # stderr gets a quarter of the budget — the interesting payload is
+        # almost always on stdout (reporter JSON), and a noisy stderr
+        # shouldn't be able to crowd it out of the Temporal payload.
+        out, out_cut = _clamp(out, req.max_output_bytes)
+        err, err_cut = _clamp(err, max(req.max_output_bytes // 4, 16_000))
+        return SandboxExecResult(
+            exit_code=code,
+            stdout=out,
+            stderr=err,
+            timed_out=timed_out,
+            duration_ms=int((time.monotonic() - started) * 1000),
+            truncated=out_cut or err_cut,
+        )
+
+    async def head_sha(self, handle: SandboxHandle) -> str | None:
+        code, out, _ = await _run(["git", "rev-parse", "HEAD"], cwd=Path(handle.cwd))
+        if code != 0:
+            return None
+        return out.strip() or None
 
     async def commits_ahead(
         self, handle: SandboxHandle, base_ref: str

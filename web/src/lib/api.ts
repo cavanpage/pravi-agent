@@ -51,6 +51,50 @@ export interface Ticket {
    * parent's `status` field from this same breakdown — these counts let
    * the UI also show the underlying mix. */
   child_status_counts: Record<string, number>;
+  /** ADR 0007 — the per-commit Cloudflare Pages preview the acceptance
+   * tests last ran against. Null when the leg never ran. */
+  preview_url: string | null;
+  /** ADR 0007 — end-to-end outcome. A separate axis from `status`: a PR
+   * can be open while its acceptance tests are red. */
+  e2e_verdict: E2EVerdict | null;
+}
+
+export type E2EVerdict =
+  | "skipped_no_criteria"
+  | "skipped_no_config"
+  | "not_run"
+  | "passed"
+  | "failing"
+  | "build_failed"
+  | "timed_out";
+
+export interface E2EFailure {
+  title: string;
+  file: string;
+  line: number | null;
+  message: string;
+  snippet: string | null;
+}
+
+/** `GET /api/tickets/{id}/preview` — the deploy + e2e report. */
+export interface Preview {
+  preview_url: string | null;
+  e2e_verdict: E2EVerdict | null;
+  e2e_attempts: number;
+  last_e2e_run_id: number | null;
+  ran: boolean;
+  passed: boolean;
+  stage: string | null;
+  total: number;
+  passed_count: number;
+  failed_count: number;
+  skipped_count: number;
+  failures: E2EFailure[];
+  /** Infra-level failure (install broke, no specs, unparseable report) —
+   * distinct from a genuine test failure. */
+  error: string | null;
+  pages_project: string | null;
+  production_url: string | null;
 }
 
 export type PersonaStatus = "active" | "coming_soon";
@@ -347,6 +391,10 @@ export interface CreateRepoInput {
   private?: boolean;
   template?: string;
   deploy_to_cloudflare_pages?: boolean;
+  /** Custom domain for the PRODUCTION deploy, e.g. "app.example.com". The
+   * zone must already be in the same Cloudflare account. Previews always
+   * stay on *.pages.dev (ADR 0007). */
+  custom_domain?: string | null;
   register_in_pravi?: boolean;
 }
 
@@ -365,11 +413,25 @@ export interface PagesProject {
   canonical_url: string | null;
 }
 
+export interface CustomDomain {
+  hostname: string;
+  status: string;
+  url: string | null;
+  dns_configured: boolean;
+  /** Set when DNS couldn't be written (usually a token without
+   * Zone:DNS:Edit). The domain is registered but stays `pending` until the
+   * record below exists. */
+  dns_skipped_reason: string | null;
+  manual_dns_record: string | null;
+}
+
 export interface CreateRepoResult {
   repo: GitHubRepoResult;
   initial_commit_pushed: boolean;
   pages: PagesProject | null;
   pages_skipped_reason: string | null;
+  custom_domain: CustomDomain | null;
+  custom_domain_skipped_reason: string | null;
   pravi_repo_id: number | null;
 }
 
@@ -779,6 +841,10 @@ export const api = {
 
   costRollup: (externalId: string) =>
     jsonReq<CostRollup>(`/api/tickets/${encodeURIComponent(externalId)}/cost-rollup`),
+
+  // ADR 0007 — preview URL + acceptance-test verdict for one ticket.
+  getPreview: (externalId: string) =>
+    jsonReq<Preview>(`/api/tickets/${encodeURIComponent(externalId)}/preview`),
 
   // PATCH the per-ticket ceiling. Pass null to clear (revert to inheritance).
   updateBudget: (externalId: string, cost_ceiling_usd: number | null) =>

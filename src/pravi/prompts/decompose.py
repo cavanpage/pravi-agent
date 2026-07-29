@@ -13,7 +13,8 @@ from textwrap import dedent
 
 from pravi.personas import ACTIVE_PERSONAS, KNOWN_STACKS
 
-VERSION = "architect/decompose/v2"
+# Bumped from v2: tasks carry an optional `acceptance` list (ADR 0007).
+VERSION = "architect/decompose/v3"
 
 
 def _personas_block() -> str:
@@ -119,6 +120,9 @@ def system_prompt(
                 description: "Concrete, file-specific description."
                 persona: "tester"   # optional — overrides feature persona
                 stack: "python-fastapi"
+                acceptance:         # optional — see "About acceptance" below
+                  - "Visiting / shows a heading 'Today's tasks'."
+                  - "Clicking Add with an empty input shows an inline error."
               - title: "..."
                 description: "..."
           - title: "..."
@@ -162,6 +166,25 @@ def system_prompt(
           - `depends_on` is a list of feature titles (strings) from THIS
             decomposition. Use an empty list `[]` when a feature has no
             dependencies. **No cycles.** Titles must match exactly.
+
+        About `acceptance` — end-to-end acceptance criteria:
+
+          - Each entry is ONE user-observable statement, checkable by
+            loading a URL in a browser and interacting with the page. A
+            developer agent turns each entry into a Playwright test that
+            runs against the deployed preview of the branch.
+          - Write them as plain assertions about visible behavior:
+            "Visiting /settings shows a 'Save' button", "Submitting the
+            form with a blank email shows the text 'Email is required'".
+            Do NOT reference implementation details — function names, DB
+            rows, HTTP status codes. The test can only see the rendered
+            page.
+          - 0–4 per task. OMIT the key entirely when the task has no
+            user-visible surface: refactors, config, migrations, docs,
+            backend-only plumbing. Do not invent criteria to fill the
+            field — a wrong criterion costs a wasted repair cycle.
+          - Prefer stable anchors: describe elements by their visible text
+            or role, never by CSS class or DOM position.
 
         About dependencies — make these *real* technical dependencies:
         feature B depends on A iff A must merge before B can be built

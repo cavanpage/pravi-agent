@@ -66,6 +66,43 @@ non-overlapping `paths` keep parallel dev runs from stepping on each other.
 A fuller example manifest lives at
 [`examples/blissful-infra-domains.yaml`](../../examples/blissful-infra-domains.yaml).
 
+## The optional `preview:` block
+
+Alongside `domains:`, the file takes an optional top-level `preview:` block
+that opts the repo into **ephemeral preview deploys + end-to-end
+verification** ([ADR 0007](../adr/0007-ephemeral-previews-and-e2e-repair-loop.md)).
+When it's present and a ticket carries acceptance criteria, pravi deploys
+the ticket's branch to a Cloudflare Pages preview, runs Playwright against
+that live URL, and feeds failures back to the dev agent.
+
+```yaml
+domains:
+  - name: frontend
+    paths: ["src/**"]
+
+preview:
+  provider: cloudflare-pages
+  # project: my-app                    # defaults to the repo's Pages project
+  wait_timeout_seconds: 900
+  first_deployment_grace_seconds: 120
+  e2e:
+    dir: e2e
+    install: ["npm", "ci"]             # argv lists, not shell strings
+    browsers: ["chromium"]
+    command: ["npx", "playwright", "test", "--reporter=json"]
+    base_url_env: E2E_BASE_URL
+    timeout_seconds: 900
+```
+
+Omitting the block (the default, and the case for every manifest written
+before this feature) leaves the repo on the plain build → PR path. Full
+reference and troubleshooting:
+[Acceptance criteria & end-to-end tests](acceptance-criteria-and-e2e.md).
+
+Note that the dev agent's write scope is widened to cover `e2e/**` and
+`playwright.config.ts` automatically on runs that author specs — you don't
+need to add those globs to every domain.
+
 ## Inspecting
 
 ```bash

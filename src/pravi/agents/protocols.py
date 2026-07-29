@@ -76,6 +76,11 @@ class DecomposedTask:
     # the dev agent falls back to generic at run time.
     persona: str | None = None
     stack: str | None = None
+    # User-observable acceptance criteria (ADR 0007). Rendered into the
+    # ticket body at materialization; the dev agent turns each one into a
+    # Playwright test that runs against the deployed preview. Empty for
+    # tasks with no user-visible surface — which turns the e2e leg off.
+    acceptance: list[str] = field(default_factory=list)
 
 
 @dataclass

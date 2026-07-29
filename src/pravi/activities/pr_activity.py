@@ -30,6 +30,50 @@ log = structlog.get_logger(__name__)
 
 
 @dataclass
+class PushBranchRequest:
+    ticket_external_id: str
+    handle: SandboxHandle
+    base_ref: str
+
+
+@dataclass
+class PushBranchResult:
+    pushed: bool
+    commits_ahead: int
+    # Full SHA of the tip we just pushed. The preview leg matches
+    # Cloudflare deployments on this, so a build is unambiguously the
+    # commit under test (ADR 0007).
+    head_sha: str | None = None
+    owner: str | None = None
+    repo: str | None = None
+    skipped_reason: str | None = None
+    error: str | None = None
+
+
+@dataclass
+class OpenPRRequest:
+    ticket_id: int
+    ticket_title: str
+    owner: str
+    repo: str
+    head_branch: str
+    base_ref: str
+    pr_body: str
+    # None defers to settings.pr_open_as_draft. The e2e path passes True
+    # so a PR that hasn't gone green yet doesn't read as ready.
+    draft: bool | None = None
+
+
+@dataclass
+class OpenPRResult:
+    pr_number: int | None
+    pr_url: str | None
+    error: str | None = None
+    # True when an open PR for this head already existed and was reused.
+    already_open: bool = False
+
+
+@dataclass
 class PushAndOpenPRRequest:
     ticket_id: int
     ticket_external_id: str
@@ -97,20 +141,25 @@ async def _persist_pr(ticket_id: int, *, pr_number: int, owner: str, repo: str) 
         )
 
 
-@activity.defn
-async def push_and_open_pr(req: PushAndOpenPRRequest) -> PushAndOpenPRResult:
+async def _resolve_and_push(
+    *, handle: SandboxHandle, base_ref: str, ticket_external_id: str
+) -> PushBranchResult:
+    """Steps 1-4 of shipping a branch: commits check → resolve owner/repo →
+    GitHub connection → push → read back the pushed SHA.
+
+    Shared by `push_branch` (which the loop calls once per iteration) and
+    `push_and_open_pr` (the pre-0007 one-shot path), so both produce the
+    same skip reasons and error strings.
+    """
     sandbox = get_sandbox()
-    handle = req.handle
 
     # 1) Did the dev agent commit anything? If not, nothing to push.
-    n_commits = await sandbox.commits_ahead(handle, req.base_ref)
+    n_commits = await sandbox.commits_ahead(handle, base_ref)
     if n_commits == 0:
-        log.info("pr.skipped.no_commits", ticket=req.ticket_external_id)
-        return PushAndOpenPRResult(
+        log.info("pr.skipped.no_commits", ticket=ticket_external_id)
+        return PushBranchResult(
             pushed=False,
-            pr_number=None,
-            pr_url=None,
-            commits_pushed=0,
+            commits_ahead=0,
             skipped_reason=(
                 "dev agent didn't commit anything — no PR to open. "
                 "Check the sandbox and commit manually if you want a PR."
@@ -120,20 +169,16 @@ async def push_and_open_pr(req: PushAndOpenPRRequest) -> PushAndOpenPRResult:
     # 2) Resolve owner/name from the sandbox's origin URL.
     origin = handle.origin_url
     if origin is None:
-        return PushAndOpenPRResult(
+        return PushBranchResult(
             pushed=False,
-            pr_number=None,
-            pr_url=None,
-            commits_pushed=n_commits,
+            commits_ahead=n_commits,
             error="repo has no `origin` remote configured",
         )
     parsed = _parse_github_remote(origin)
     if parsed is None:
-        return PushAndOpenPRResult(
+        return PushBranchResult(
             pushed=False,
-            pr_number=None,
-            pr_url=None,
-            commits_pushed=n_commits,
+            commits_ahead=n_commits,
             skipped_reason=f"origin is not a GitHub remote ({origin!r}) — skipping PR",
         )
     owner, repo_name = parsed
@@ -141,11 +186,11 @@ async def push_and_open_pr(req: PushAndOpenPRRequest) -> PushAndOpenPRResult:
     # 3) Need an OAuth connection to push + open the PR.
     conn = await gh.get_active_connection()
     if conn is None:
-        return PushAndOpenPRResult(
+        return PushBranchResult(
             pushed=False,
-            pr_number=None,
-            pr_url=None,
-            commits_pushed=n_commits,
+            commits_ahead=n_commits,
+            owner=owner,
+            repo=repo_name,
             skipped_reason=(
                 "no GitHub connection. Click 'Connect GitHub' in the web UI, "
                 "then re-run this task."
@@ -158,21 +203,138 @@ async def push_and_open_pr(req: PushAndOpenPRRequest) -> PushAndOpenPRResult:
         handle, token=conn.access_token, owner=owner, name=repo_name
     )
     if not ok:
-        return PushAndOpenPRResult(
+        return PushBranchResult(
             pushed=False,
-            pr_number=None,
-            pr_url=None,
-            commits_pushed=n_commits,
+            commits_ahead=n_commits,
+            owner=owner,
+            repo=repo_name,
             error=f"git push failed: {msg}",
         )
+
+    head_sha = await sandbox.head_sha(handle)
     log.info(
         "pr.pushed",
-        ticket=req.ticket_external_id,
+        ticket=ticket_external_id,
         branch=handle.branch,
         owner=owner,
         repo=repo_name,
         commits=n_commits,
+        head_sha=head_sha,
     )
+    return PushBranchResult(
+        pushed=True,
+        commits_ahead=n_commits,
+        head_sha=head_sha,
+        owner=owner,
+        repo=repo_name,
+    )
+
+
+@activity.defn
+async def push_branch(req: PushBranchRequest) -> PushBranchResult:
+    """Push the ticket's branch. Safe to retry — a re-push of the same
+    branch is a fast-forward no-op."""
+    return await _resolve_and_push(
+        handle=req.handle,
+        base_ref=req.base_ref,
+        ticket_external_id=req.ticket_external_id,
+    )
+
+
+@activity.defn
+async def open_pr(req: OpenPRRequest) -> OpenPRResult:
+    """Open (or adopt) the PR for an already-pushed branch.
+
+    Idempotent on purpose: with retries enabled, a partial failure would
+    otherwise 422 on "A pull request already exists for this head". We
+    look for an open PR on the head first and reuse it.
+    """
+    conn = await gh.get_active_connection()
+    if conn is None:
+        return OpenPRResult(
+            pr_number=None,
+            pr_url=None,
+            error="no GitHub connection — cannot open a PR",
+        )
+
+    existing = await gh.find_open_pull_request(
+        conn.access_token, owner=req.owner, repo=req.repo, head_branch=req.head_branch
+    )
+    if existing is not None:
+        pr_number = int(existing["number"])
+        pr_url = existing.get("html_url") or _pr_url(req.owner, req.repo, pr_number)
+        await _persist_pr(
+            req.ticket_id, pr_number=pr_number, owner=req.owner, repo=req.repo
+        )
+        log.info("pr.reused", pr_number=pr_number, url=pr_url)
+        return OpenPRResult(pr_number=pr_number, pr_url=pr_url, already_open=True)
+
+    draft = (
+        get_settings().pr_open_as_draft if req.draft is None else req.draft
+    )
+    try:
+        pr = await gh.create_pull_request(
+            conn.access_token,
+            owner=req.owner,
+            repo=req.repo,
+            head=req.head_branch,
+            base=req.base_ref,
+            title=req.ticket_title,
+            body=req.pr_body,
+            draft=draft,
+        )
+    except Exception as e:
+        return OpenPRResult(
+            pr_number=None,
+            pr_url=None,
+            error=f"PR open failed: {type(e).__name__}: {e}",
+        )
+
+    pr_number = int(pr["number"])
+    pr_url = pr.get("html_url") or _pr_url(req.owner, req.repo, pr_number)
+    await _persist_pr(req.ticket_id, pr_number=pr_number, owner=req.owner, repo=req.repo)
+    log.info("pr.opened", pr_number=pr_number, url=pr_url, draft=draft)
+    return OpenPRResult(pr_number=pr_number, pr_url=pr_url)
+
+
+def _pr_url(owner: str, repo: str, number: int) -> str:
+    return f"https://github.com/{owner}/{repo}/pull/{number}"
+
+
+@activity.defn
+async def push_and_open_pr(req: PushAndOpenPRRequest) -> PushAndOpenPRResult:
+    """DEPRECATED — the one-shot push+PR path used before ADR 0007.
+
+    `FeatureWorkflow` now calls `push_branch` + `open_pr` separately so
+    the repair loop can push repeatedly against a single PR. Kept
+    registered because in-flight workflow histories reference it.
+    """
+    handle = req.handle
+    pushed = await _resolve_and_push(
+        handle=handle, base_ref=req.base_ref, ticket_external_id=req.ticket_external_id
+    )
+    if not pushed.pushed:
+        return PushAndOpenPRResult(
+            pushed=False,
+            pr_number=None,
+            pr_url=None,
+            commits_pushed=pushed.commits_ahead,
+            skipped_reason=pushed.skipped_reason,
+            error=pushed.error,
+        )
+    owner, repo_name = pushed.owner, pushed.repo
+    n_commits = pushed.commits_ahead
+    assert owner is not None and repo_name is not None
+
+    conn = await gh.get_active_connection()
+    if conn is None:
+        return PushAndOpenPRResult(
+            pushed=True,
+            pr_number=None,
+            pr_url=None,
+            commits_pushed=n_commits,
+            skipped_reason="no GitHub connection",
+        )
 
     # 5) Open the PR. Defaults to "ready for review" — pravi's review
     #    gate is at PR-merge time, so a PR sitting in draft would just

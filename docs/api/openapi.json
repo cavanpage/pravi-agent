@@ -504,6 +504,17 @@
       "CreateRepoRequest": {
         "description": "Body for `POST /api/auth/github/repos/new`.",
         "properties": {
+          "custom_domain": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Custom Domain"
+          },
           "deploy_to_cloudflare_pages": {
             "default": false,
             "title": "Deploy To Cloudflare Pages",
@@ -543,6 +554,27 @@
       "CreateRepoResult": {
         "description": "Outcome of a new-repo create. Surfaces what happened on each leg\nso the UI can render success / partial-success / what-to-do-next.",
         "properties": {
+          "custom_domain": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CustomDomainOut"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "custom_domain_skipped_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Custom Domain Skipped Reason"
+          },
           "initial_commit_pushed": {
             "title": "Initial Commit Pushed",
             "type": "boolean"
@@ -755,6 +787,62 @@
         "title": "CreateTicketResult",
         "type": "object"
       },
+      "CustomDomainOut": {
+        "properties": {
+          "dns_configured": {
+            "default": false,
+            "title": "Dns Configured",
+            "type": "boolean"
+          },
+          "dns_skipped_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Dns Skipped Reason"
+          },
+          "hostname": {
+            "title": "Hostname",
+            "type": "string"
+          },
+          "manual_dns_record": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Manual Dns Record"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          },
+          "url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Url"
+          }
+        },
+        "required": [
+          "hostname",
+          "status"
+        ],
+        "title": "CustomDomainOut",
+        "type": "object"
+      },
       "DecomposeApproveOut": {
         "description": "External IDs of the rows just created \u2014 useful so the UI can refresh.",
         "properties": {
@@ -868,6 +956,51 @@
           "build"
         ],
         "title": "DomainOut",
+        "type": "object"
+      },
+      "E2EFailureOut": {
+        "properties": {
+          "file": {
+            "title": "File",
+            "type": "string"
+          },
+          "line": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Line"
+          },
+          "message": {
+            "default": "",
+            "title": "Message",
+            "type": "string"
+          },
+          "snippet": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Snippet"
+          },
+          "title": {
+            "title": "Title",
+            "type": "string"
+          }
+        },
+        "required": [
+          "title",
+          "file"
+        ],
+        "title": "E2EFailureOut",
         "type": "object"
       },
       "GitHubConnectionOut": {
@@ -1525,6 +1658,133 @@
         "title": "PlanDraftRequest",
         "type": "object"
       },
+      "PreviewOut": {
+        "description": "`GET /api/tickets/{external_id}/preview` \u2014 the deploy + e2e report.",
+        "properties": {
+          "e2e_attempts": {
+            "default": 0,
+            "title": "E2E Attempts",
+            "type": "integer"
+          },
+          "e2e_verdict": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "E2E Verdict"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error"
+          },
+          "failed_count": {
+            "default": 0,
+            "title": "Failed Count",
+            "type": "integer"
+          },
+          "failures": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/E2EFailureOut"
+            },
+            "title": "Failures",
+            "type": "array"
+          },
+          "last_e2e_run_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last E2E Run Id"
+          },
+          "pages_project": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pages Project"
+          },
+          "passed": {
+            "default": false,
+            "title": "Passed",
+            "type": "boolean"
+          },
+          "passed_count": {
+            "default": 0,
+            "title": "Passed Count",
+            "type": "integer"
+          },
+          "preview_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Preview Url"
+          },
+          "production_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Production Url"
+          },
+          "ran": {
+            "default": false,
+            "title": "Ran",
+            "type": "boolean"
+          },
+          "skipped_count": {
+            "default": 0,
+            "title": "Skipped Count",
+            "type": "integer"
+          },
+          "stage": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Stage"
+          },
+          "total": {
+            "default": 0,
+            "title": "Total",
+            "type": "integer"
+          }
+        },
+        "title": "PreviewOut",
+        "type": "object"
+      },
       "RepoOut": {
         "properties": {
           "github_name": {
@@ -2012,6 +2272,17 @@
             ],
             "title": "Domain Name"
           },
+          "e2e_verdict": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "E2E Verdict"
+          },
           "external_id": {
             "title": "External Id",
             "type": "string"
@@ -2078,6 +2349,17 @@
               }
             ],
             "title": "Pr Url"
+          },
+          "preview_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Preview Url"
           },
           "repo": {
             "$ref": "#/components/schemas/RepoOut"
@@ -3872,6 +4154,46 @@
           }
         },
         "summary": "Draft"
+      }
+    },
+    "/api/tickets/{external_id}/preview": {
+      "get": {
+        "description": "Deploy + end-to-end report for one ticket (ADR 0007).\n\nPowers the <E2EPanel> on the ticket page. Pure DB read \u2014 the verdict\nand URL live on the Ticket row, the detail on the newest tester Run's\ntranscript \u2014 so no Cloudflare call is involved and this is cheap\nenough to poll.",
+        "operationId": "get_preview_api_tickets__external_id__preview_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "external_id",
+            "required": true,
+            "schema": {
+              "title": "External Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PreviewOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Preview"
       }
     },
     "/api/tickets/{external_id}/roadmap": {

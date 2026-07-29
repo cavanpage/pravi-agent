@@ -14,6 +14,7 @@ from temporalio import activity
 
 from pravi.db.models import Plan, Repo, Ticket, TicketStatus
 from pravi.db.session import session_scope
+from pravi.events import emit_event
 
 log = structlog.get_logger(__name__)
 
@@ -289,4 +290,33 @@ async def update_ticket_status(req: TicketStatusUpdate) -> None:
             ticket_id=req.ticket_id,
             status=req.status,
             workflow_id=req.workflow_id,
+        )
+
+
+@dataclass
+class EmitEventRequest:
+    """Push a telemetry event onto the ticket's live stream.
+
+    Lets the workflow narrate the deploy + e2e loop (ADR 0007) without
+    taking a DB dependency of its own. Fire-and-forget by contract: a
+    failed telemetry write must never fail a ticket.
+    """
+
+    ticket_id: int
+    kind: str
+    message: str
+    run_id: int | None = None
+    payload: dict | None = None
+
+
+@activity.defn
+async def emit_ticket_event(req: EmitEventRequest) -> None:
+    async with session_scope() as session:
+        await emit_event(
+            session,
+            ticket_id=req.ticket_id,
+            run_id=req.run_id,
+            kind=req.kind,
+            message=req.message,
+            payload=req.payload,
         )
