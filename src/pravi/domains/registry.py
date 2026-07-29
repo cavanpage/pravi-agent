@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Literal
 
 import yaml
 from pydantic import BaseModel, Field, field_validator
@@ -22,8 +23,49 @@ class Domain(BaseModel):
         return v
 
 
+class E2EConfig(BaseModel):
+    """How to run the end-to-end suite against a deployed preview.
+
+    Commands are argv lists, not shell strings — they're fed straight to
+    the sandbox's `exec`, which never invokes a shell.
+    """
+
+    dir: str = "e2e"
+    install: list[str] = Field(default_factory=lambda: ["npm", "ci"])
+    browsers: list[str] = Field(default_factory=lambda: ["chromium"])
+    command: list[str] = Field(
+        default_factory=lambda: ["npx", "playwright", "test", "--reporter=json"]
+    )
+    base_url_env: str = "E2E_BASE_URL"
+    timeout_seconds: int = Field(default=900, ge=30, le=3600)
+
+    @field_validator("dir")
+    @classmethod
+    def _safe_rel_dir(cls, v: str) -> str:
+        if v.startswith("/") or ".." in Path(v).parts:
+            raise ValueError(f"e2e.dir must be a relative path inside the repo: {v!r}")
+        return v.strip("/")
+
+
+class PreviewConfig(BaseModel):
+    """Opt-in: deploy each ticket's branch to an ephemeral preview and run
+    the e2e suite against it (ADR 0007). Absent from domains.yaml means the
+    whole leg is off, which is how every pre-0007 repo stays unaffected."""
+
+    provider: Literal["cloudflare-pages"] = "cloudflare-pages"
+    # Cloudflare Pages project name. None → fall back to the Repo row's
+    # `cf_pages_project`, then to a one-shot name probe.
+    project: str | None = None
+    wait_timeout_seconds: int = Field(default=900, ge=60, le=3600)
+    # How long to keep looking before concluding that Cloudflare never
+    # registered a build for the pushed commit at all (webhook lag).
+    first_deployment_grace_seconds: int = Field(default=120, ge=30, le=600)
+    e2e: E2EConfig = Field(default_factory=E2EConfig)
+
+
 class DomainsFile(BaseModel):
     domains: list[Domain] = Field(min_length=1)
+    preview: PreviewConfig | None = None
 
     @field_validator("domains")
     @classmethod
@@ -57,6 +99,11 @@ class DomainRegistry:
     @property
     def domains(self) -> list[Domain]:
         return self.file.domains
+
+    @property
+    def preview(self) -> PreviewConfig | None:
+        """The repo's preview/e2e config, or None when the leg is off."""
+        return self.file.preview
 
     def get(self, name: str) -> Domain:
         for d in self.domains:

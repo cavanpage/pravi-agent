@@ -1,7 +1,7 @@
 """Sandbox Protocol — see ADR 0003."""
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Protocol
 
 
@@ -42,6 +42,37 @@ class SandboxHandle:
     backend: str  # "local" today; "docker" / "cloudflare" / … later
 
 
+@dataclass
+class SandboxExecRequest:
+    """One command run inside a provisioned sandbox.
+
+    `command` is argv — never a shell string. Implementations must not
+    invoke a shell: no injection surface, no per-backend shell drift.
+    `cwd_rel` is relative to the handle's working dir; "" means its root.
+    `env` is merged *over* the inherited environment (so PATH survives and
+    `npx` still resolves).
+    """
+
+    command: list[str]
+    cwd_rel: str = ""
+    env: dict[str, str] = field(default_factory=dict)
+    timeout_seconds: int = 900
+    # Captured output is truncated head+tail past this, so a runaway build
+    # log can't blow through Temporal's payload limit. Callers that parse
+    # the output (the e2e report) raise it and check `truncated`.
+    max_output_bytes: int = 1_000_000
+
+
+@dataclass
+class SandboxExecResult:
+    exit_code: int
+    stdout: str
+    stderr: str
+    timed_out: bool = False
+    duration_ms: int = 0
+    truncated: bool = False
+
+
 class Sandbox(Protocol):
     """Provisions, drives git operations on, and tears down a per-ticket
     working environment. One impl per backend.
@@ -54,6 +85,26 @@ class Sandbox(Protocol):
     async def provision(
         self, req: SandboxProvisionRequest
     ) -> SandboxHandle: ...
+
+    async def exec(
+        self, handle: SandboxHandle, req: SandboxExecRequest
+    ) -> SandboxExecResult:
+        """Run a command inside the sandbox.
+
+        Never raises on a non-zero exit — the caller reads `exit_code`.
+        Raises only when the sandbox itself is unreachable. Added in ADR
+        0007 so the e2e leg can install deps and run Playwright wherever
+        the code physically lives, without the workflow learning paths.
+        """
+        ...
+
+    async def head_sha(self, handle: SandboxHandle) -> str | None:
+        """Full 40-char SHA at the branch tip, or None if not resolvable.
+
+        The preview leg matches Cloudflare deployments on this, so a given
+        build is unambiguously the commit we just pushed.
+        """
+        ...
 
     async def commits_ahead(
         self, handle: SandboxHandle, base_ref: str

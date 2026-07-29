@@ -11,6 +11,7 @@ jump straight to the one you need.
 | 3 | [New repos & Cloudflare Pages](new-repo-and-cloudflare.md) | Creating a GitHub repo from a starter template in-UI, connecting Cloudflare, and auto-deploying it to Pages on every push. |
 | 4 | [Persona & stack catalog](personas-and-stacks.md) | The built-in personas and stacks the architect picks from during decomposition, and how to read (or extend) the catalog. |
 | 5 | [Budget ceilings & spend views](budgets.md) | How `$` ceilings inherit Epic → Feature → Task, where they're enforced, and the per-persona / per-stack spend breakdowns in the UI. |
+| 6 | [Acceptance criteria & end-to-end tests](acceptance-criteria-and-e2e.md) | Deploying each ticket's branch to an ephemeral preview, verifying acceptance criteria with Playwright against the live URL, and the bounded repair loop — plus what it costs. |
 
 For architecture decisions ("why Temporal?", "why no RAG?") see
 [`../adr/`](../adr/README.md). For a project overview and quickstart, see the

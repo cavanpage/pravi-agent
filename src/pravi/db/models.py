@@ -74,6 +74,14 @@ class Repo(Base, TimestampMixin):
     local_path: Mapped[str | None] = mapped_column(Text, nullable=True)
     github_owner: Mapped[str | None] = mapped_column(String(255), nullable=True)
     github_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    # Cloudflare Pages project bound to this repo (ADR 0007). Written by
+    # the create-repo flow — previously computed and thrown away — and
+    # lazily back-filled by the preview leg's name probe for repos
+    # registered before that. Null means "no preview deploys for this repo".
+    cf_pages_project: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    # Production custom domain attached to that Pages project, if any.
+    # Preview deployments always stay on *.pages.dev.
+    cf_custom_domain: Mapped[str | None] = mapped_column(String(255), nullable=True)
 
     tickets: Mapped[list[Ticket]] = relationship(back_populates="repo")
 
@@ -95,6 +103,14 @@ class Ticket(Base, TimestampMixin):
     # If imported from a GitHub issue: the original issue URL. Surfaced in
     # the UI as a "from GitHub #N" chip linking back to the source.
     github_issue_url: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Latest per-commit preview deployment URL for this ticket's branch
+    # (ADR 0007) — what the e2e suite was actually run against.
+    preview_url: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Latest end-to-end verdict. Null = never ran. One of: skipped_no_criteria
+    # | skipped_no_config | passed | failing | build_failed | timed_out.
+    # Deliberately a free string rather than an enum: this is a report
+    # field, not a state machine, and it's a separate axis from `status`.
+    e2e_verdict: Mapped[str | None] = mapped_column(String(32), nullable=True)
     # Agent personas + stack — see ADR 0004. Both nullable; null persona
     # resolves to `other` (generic prompt), null stack to `unknown` (no
     # additional skill hint). Decompose architect assigns; the dev

@@ -66,6 +66,21 @@ class DevActivityRequest:
     # ADR 0004. None on each falls back to the generic prompt.
     persona: str | None = None
     stack: str | None = None
+    # Acceptance criteria for this task (ADR 0007). Non-empty means the
+    # agent is also asked to author Playwright specs under `e2e_dir`.
+    # Empty leaves the system prompt byte-identical to dev/v2.
+    acceptance_criteria: list[str] = field(default_factory=list)
+    e2e_dir: str = "e2e"
+    e2e_base_url_env: str = "E2E_BASE_URL"
+    # 1 for the initial build, 2+ for each repair pass. Recorded on the
+    # Run row so the UI can show "attempt 2 of 3".
+    iteration: int = 1
+    # Whether this is the LAST run for the ticket. The `run_finished`
+    # event carries it, and the SSE endpoint only closes the stream on a
+    # terminal one — otherwise a repair loop's first run would shut the
+    # live panel mid-flight. Defaults True so every existing caller and
+    # every pre-0007 event keeps today's behavior.
+    terminal: bool = True
 
 
 @dataclass
@@ -94,6 +109,9 @@ def _build_request(req: DevActivityRequest) -> DevRunRequest:
         cwd=req.cwd,
         persona=req.persona,
         stack=req.stack,
+        acceptance_criteria=list(req.acceptance_criteria),
+        e2e_dir=req.e2e_dir,
+        e2e_base_url_env=req.e2e_base_url_env,
     )
     return DevRunRequest(
         cwd=req.cwd,
@@ -105,13 +123,14 @@ def _build_request(req: DevActivityRequest) -> DevRunRequest:
     )
 
 
-async def _create_run_row(ticket_id: int) -> int:
+async def _create_run_row(ticket_id: int, iteration: int = 1) -> int:
     """Mark a new developer Run as started; return its id."""
     async with session_scope() as session:
         row = Run(
             ticket_id=ticket_id,
             kind=RunKind.developer,
             status=RunStatus.started,
+            iteration=iteration,
             prompt_version=DEV_PROMPT_VERSION,
         )
         session.add(row)
@@ -252,6 +271,10 @@ async def _refuse_for_budget(
                 # banner logic only has to read these two fields.
                 "failure_reason": "budget_exhausted",
                 "failure_message": error_msg,
+                # A budget refusal always ends the ticket's work — the
+                # loop treats it as a give-up condition — so the stream
+                # should close.
+                "terminal": True,
             },
         )
     return DevActivityResult(
@@ -307,7 +330,7 @@ async def run_dev(req: DevActivityRequest) -> DevActivityResult:
     event_sink = None
     budget_remaining: float | None = None
     if req.ticket_id is not None:
-        run_id = await _create_run_row(req.ticket_id)
+        run_id = await _create_run_row(req.ticket_id, req.iteration)
 
         # Pre-flight budget check: refuse if any ceiling up the chain is
         # already exhausted. Otherwise, clamp the per-run cap down to the
@@ -405,6 +428,11 @@ async def run_dev(req: DevActivityRequest) -> DevActivityResult:
                     "errors": result.errors,
                     "failure_reason": failure_reason,
                     "failure_message": failure_message,
+                    "iteration": req.iteration,
+                    # False while a repair loop may still run — the SSE
+                    # endpoint keeps the live panel open until a terminal
+                    # run_finished arrives (ADR 0007).
+                    "terminal": req.terminal,
                 },
             )
 

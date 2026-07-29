@@ -4,9 +4,18 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 
-import { AgentDraft, api, StatusEvent, subscribeStatus, Ticket, TicketKind } from "../lib/api";
+import {
+  AgentDraft,
+  api,
+  type E2EVerdict,
+  StatusEvent,
+  subscribeStatus,
+  Ticket,
+  TicketKind,
+} from "../lib/api";
 import { DecomposePanel } from "../components/DecomposePanel";
 import { DependencyEditor } from "../components/DependencyEditor";
+import { E2EPanel } from "../components/E2EPanel";
 import { LiveRunPanel } from "../components/LiveRunPanel";
 import { PlanEditor } from "../components/PlanEditor";
 import { ChildStatusChips } from "../components/ChildStatusChips";
@@ -23,6 +32,10 @@ import {
 
 // Statuses that mean a dev agent run is or was happening — render LiveRunPanel.
 const RUN_VISIBLE = new Set(["running_dev", "done", "in_progress", "pr_open", "failed"]);
+
+// Statuses where the deploy → e2e → repair loop could still be moving, so
+// <E2EPanel> keeps polling. A settled verdict never changes on its own.
+const RUN_ACTIVE = new Set(["running_dev", "in_progress", "planning", "plan_approved"]);
 
 // Plan workflow: terminal once the server stops streaming.
 const TERMINAL_EXEC = new Set(["COMPLETED", "FAILED", "CANCELED", "TERMINATED", "TIMED_OUT"]);
@@ -240,6 +253,18 @@ export function TicketPlanPage() {
                 ⤴ PR #{ticket.pr_number} opened on GitHub
               </a>
             ) : null}
+            {ticket.preview_url ? (
+              <a
+                href={ticket.preview_url}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-blue-400/10 border border-blue-400/30 text-xs text-blue-200 hover:bg-blue-400/15 transition"
+                title={ticket.preview_url}
+              >
+                🌐 live preview
+              </a>
+            ) : null}
+            {ticket.e2e_verdict ? <VerdictPill verdict={ticket.e2e_verdict} /> : null}
           </div>
         </div>
         <div className="flex flex-col items-end gap-1.5">
@@ -440,9 +465,40 @@ export function TicketPlanPage() {
           {RUN_VISIBLE.has(statusEvt?.status || ticket.status) ? (
             <LiveRunPanel externalId={externalId} />
           ) : null}
+
+          <E2EPanel
+            externalId={externalId}
+            active={RUN_ACTIVE.has(statusEvt?.status || ticket.status)}
+          />
         </>
       ) : null}
     </div>
+  );
+}
+
+function VerdictPill({ verdict }: { verdict: E2EVerdict }) {
+  const styles: Partial<Record<E2EVerdict, string>> = {
+    passed: "bg-emerald-400/10 border-emerald-400/30 text-emerald-200",
+    failing: "bg-rose-400/10 border-rose-400/30 text-rose-200",
+    build_failed: "bg-amber-400/10 border-amber-400/30 text-amber-200",
+    timed_out: "bg-amber-400/10 border-amber-400/30 text-amber-200",
+  };
+  const labels: Partial<Record<E2EVerdict, string>> = {
+    passed: "✓ e2e passed",
+    failing: "✕ e2e failing",
+    build_failed: "⚠ build failed",
+    timed_out: "⚠ preview timed out",
+  };
+  // The skipped_* and not_run verdicts aren't worth a chip — the panel
+  // below explains them, and a chip for "nothing happened" is noise.
+  const klass = styles[verdict];
+  if (!klass) return null;
+  return (
+    <span
+      className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full border text-xs ${klass}`}
+    >
+      {labels[verdict]}
+    </span>
   );
 }
 

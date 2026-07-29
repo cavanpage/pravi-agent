@@ -65,6 +65,26 @@ class Settings(BaseSettings):
     dev_max_turns: int = 50  # SDK-side cap on agent iterations
     dev_max_cost_usd: float = 5.0  # SDK-side hard budget per run
 
+    # --- Ephemeral previews + end-to-end tests (ADR 0007) ---------------
+    # Master off-switch. Per-repo control is the `preview:` block in
+    # .builder/domains.yaml; per-ticket control is whether the spec carries
+    # acceptance criteria. This is the "turn it off everywhere" lever.
+    e2e_enabled: bool = True
+    # How many times the dev agent gets to fix a failing suite before we
+    # give up and leave the PR for a human. Each attempt is a full dev run,
+    # so worst-case ticket spend is roughly this × dev_max_cost_usd —
+    # set `ticket_cost_ceiling_usd` if that matters to you.
+    e2e_max_attempts: int = 3
+    # `npm ci` on a cold worktree, separate from the test timeout.
+    e2e_install_timeout_seconds: int = 900
+    # Shared Playwright browser cache. Without this every worktree
+    # re-downloads ~150MB of Chromium.
+    playwright_browsers_path: str = "~/.pravi/playwright-browsers"
+    # `playwright install --with-deps` shells out to `sudo apt-get` on
+    # Linux, which hangs forever on a password prompt nothing can answer.
+    # Opt in only where the worker can actually sudo non-interactively.
+    playwright_install_deps: bool = False
+
     # Default cumulative spend ceiling per ticket, in USD.
     # Null = unlimited. Used when neither the ticket nor any ancestor sets
     # `cost_ceiling_usd` explicitly. Pre-flight enforced before each dev run.
@@ -132,6 +152,10 @@ class Settings(BaseSettings):
     @property
     def clone_base_resolved(self) -> Path:
         return self.clone_base.expanduser().resolve()
+
+    @property
+    def playwright_browsers_path_resolved(self) -> Path:
+        return Path(self.playwright_browsers_path).expanduser().resolve()
 
 
 _settings: Settings | None = None

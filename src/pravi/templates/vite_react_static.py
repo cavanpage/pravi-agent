@@ -21,13 +21,16 @@ _PACKAGE_JSON = """\
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "e2e": "playwright test",
+    "e2e:ui": "playwright test --ui"
   },
   "dependencies": {
     "react": "^18.3.1",
     "react-dom": "^18.3.1"
   },
   "devDependencies": {
+    "@playwright/test": "^1.50.0",
     "@types/react": "^18.3.12",
     "@types/react-dom": "^18.3.1",
     "@vitejs/plugin-react": "^4.3.3",
@@ -37,6 +40,102 @@ _PACKAGE_JSON = """\
     "vite": "^6.0.0"
   }
 }
+"""
+
+# Shared by every template — pravi runs this against the deployed preview.
+_PLAYWRIGHT_CONFIG = """\
+import { defineConfig, devices } from "@playwright/test";
+
+// pravi sets E2E_BASE_URL to the per-commit Cloudflare Pages preview URL
+// for the branch under test. Locally it falls back to the dev server.
+const baseURL = process.env.E2E_BASE_URL ?? "http://localhost:5173";
+
+export default defineConfig({
+  testDir: "e2e",
+  timeout: 30_000,
+  expect: { timeout: 10_000 },
+  fullyParallel: true,
+  forbidOnly: !!process.env.CI,
+  retries: process.env.CI ? 1 : 0,
+  workers: process.env.CI ? 2 : undefined,
+  // CI=1 selects the JSON reporter, which writes the machine-readable
+  // report to STDOUT. pravi parses that stream — do NOT add an
+  // `outputFile` here, it would redirect the report to disk and pravi
+  // would see an empty result.
+  reporter: process.env.CI ? "json" : "list",
+  use: {
+    baseURL,
+    trace: "on-first-retry",
+    screenshot: "only-on-failure",
+  },
+  projects: [{ name: "chromium", use: { ...devices["Desktop Chrome"] } }],
+});
+"""
+
+_SMOKE_SPEC = """\
+import { expect, test } from "@playwright/test";
+
+test("home page loads and renders the app shell", async ({ page }) => {
+  const res = await page.goto("/");
+  expect(res?.status()).toBeLessThan(400);
+  await expect(page.getByTestId("app-root")).toBeVisible();
+});
+"""
+
+# Appended to every template's .builder/domains.yaml. Deleting the
+# `preview:` block is how a repo opts out of the deploy + e2e leg.
+_PREVIEW_BLOCK = """\
+
+  - name: e2e
+    description: "Playwright end-to-end specs, run against the deployed preview."
+    paths:
+      - "e2e/**"
+      - "playwright.config.ts"
+    test: "npx playwright test"
+    context_files:
+      - "e2e/smoke.spec.ts"
+      - "playwright.config.ts"
+
+# pravi deploys each ticket's branch to a Cloudflare Pages preview and runs
+# the e2e suite against it, feeding failures back to the dev agent. Delete
+# this block to turn that off.
+preview:
+  provider: cloudflare-pages
+  # project: %PROJECT_NAME%   # defaults to the repo's registered Pages project
+  wait_timeout_seconds: 900
+  e2e:
+    dir: e2e
+    install: ["npm", "ci"]
+    browsers: ["chromium"]
+    command: ["npx", "playwright", "test", "--reporter=json"]
+    base_url_env: E2E_BASE_URL
+    timeout_seconds: 900
+"""
+
+_README_E2E = """\
+
+## End-to-end tests
+
+Playwright specs live in `e2e/` and run against a **deployed** URL, not a
+local build:
+
+```bash
+npm run dev                                     # terminal 1
+E2E_BASE_URL=http://localhost:5173 npm run e2e  # terminal 2
+
+# …or against the live site:
+E2E_BASE_URL=https://%PROJECT_NAME%.pages.dev npm run e2e
+```
+
+When pravi builds a feature for you it pushes the branch, waits for the
+Cloudflare Pages **preview** deployment of that exact commit, runs this
+suite against it, and — if anything fails — feeds the failures back to the
+dev agent to fix. Acceptance criteria you write on a ticket become tests in
+this directory.
+
+`playwright.config.ts` selects the JSON reporter when `CI=1`, and pravi
+parses that report from stdout. Don't give the JSON reporter an
+`outputFile`.
 """
 
 _VITE_CONFIG = """\
@@ -113,7 +212,10 @@ createRoot(document.getElementById("root")!).render(
 _APP_TSX = """\
 export default function App() {
   return (
-    <main className="min-h-screen flex items-center justify-center bg-gradient-to-br from-slate-950 to-slate-900 text-slate-100 p-8">
+    <main
+      data-testid="app-root"
+      className="min-h-screen flex items-center justify-center bg-gradient-to-br from-slate-950 to-slate-900 text-slate-100 p-8"
+    >
       <div className="max-w-xl text-center space-y-4">
         <div className="text-xs uppercase tracking-[0.18em] text-slate-500">
           %PROJECT_NAME%
@@ -150,6 +252,10 @@ dist/
 .env
 .env.local
 *.log
+test-results/
+playwright-report/
+blob-report/
+playwright/.cache/
 """
 
 _DOMAINS_YAML = """\
@@ -172,6 +278,7 @@ domains:
       - "README.md"
       - "src/App.tsx"
 """
+_DOMAINS_YAML += _PREVIEW_BLOCK
 
 _README = """\
 # %PROJECT_NAME%
@@ -218,6 +325,7 @@ Build output is plain `dist/` — point any static host at it.
    PRs.
 4. Each merged PR triggers a Pages redeploy. Your URL stays the same.
 """
+_README += _README_E2E
 
 
 def render(*, project_name: str, repo_full_name: str) -> TemplateManifest:
@@ -232,6 +340,8 @@ def render(*, project_name: str, repo_full_name: str) -> TemplateManifest:
         "src/main.tsx": _MAIN_TSX,
         "src/App.tsx": _APP_TSX,
         "src/index.css": _INDEX_CSS,
+        "playwright.config.ts": _PLAYWRIGHT_CONFIG,
+        "e2e/smoke.spec.ts": _SMOKE_SPEC,
         ".gitignore": _GITIGNORE,
         ".builder/domains.yaml": _DOMAINS_YAML,
         "README.md": _README,

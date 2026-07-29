@@ -3,9 +3,10 @@ purpose — the DB schema is internal, the API shape is a contract."""
 
 from __future__ import annotations
 
+import re
 from datetime import datetime
 
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 
 
 class RepoOut(BaseModel):
@@ -101,6 +102,43 @@ class TicketOut(BaseModel):
     # env default / unlimited. See /tickets/{id}/cost-rollup for the
     # effective value after walking the chain.
     cost_ceiling_usd: float | None = None
+    # Ephemeral preview + e2e verdict (ADR 0007). Both null on tickets that
+    # never ran the leg. The verdict is a separate axis from `status`: a PR
+    # can be open while its acceptance tests are red.
+    preview_url: str | None = None
+    e2e_verdict: str | None = None
+
+
+class E2EFailureOut(BaseModel):
+    title: str
+    file: str
+    line: int | None = None
+    message: str = ""
+    snippet: str | None = None
+
+
+class PreviewOut(BaseModel):
+    """`GET /api/tickets/{external_id}/preview` — the deploy + e2e report."""
+
+    preview_url: str | None = None
+    # null = the leg never ran for this ticket.
+    e2e_verdict: str | None = None
+    e2e_attempts: int = 0
+    last_e2e_run_id: int | None = None
+    ran: bool = False
+    passed: bool = False
+    stage: str | None = None
+    total: int = 0
+    passed_count: int = 0
+    failed_count: int = 0
+    skipped_count: int = 0
+    failures: list[E2EFailureOut] = []
+    # Infra-level failure (install broke, no specs written, unparseable
+    # report) — distinct from a genuine test failure.
+    error: str | None = None
+    # Production side, off the Repo row.
+    pages_project: str | None = None
+    production_url: str | None = None
 
 
 class TicketBudgetUpdate(BaseModel):
@@ -440,9 +478,44 @@ class CreateRepoRequest(BaseModel):
     # repo (auto-deploys every push). Falls through to "skipped" if
     # Cloudflare creds aren't configured.
     deploy_to_cloudflare_pages: bool = False
+    # Custom domain for the PRODUCTION deployment, e.g. "app.example.com".
+    # The zone must already be in the same Cloudflare account. Preview
+    # deployments always stay on *.pages.dev (ADR 0007).
+    custom_domain: str | None = None
     # If True, also auto-clone the new repo locally + register it in
     # pravi's Repo table so it's immediately usable as a ticket target.
     register_in_pravi: bool = True
+
+    @field_validator("custom_domain")
+    @classmethod
+    def _valid_hostname(cls, v: str | None) -> str | None:
+        if v is None:
+            return None
+        v = v.strip().lower().rstrip(".")
+        if not v:
+            return None
+        if v.endswith(".pages.dev"):
+            raise ValueError(
+                "pages.dev hostnames are assigned automatically — pass a "
+                "domain you own instead"
+            )
+        if not re.fullmatch(
+            r"(?=.{1,253}$)([a-z0-9](-?[a-z0-9])*\.)+[a-z]{2,}", v
+        ):
+            raise ValueError(f"not a valid hostname: {v!r}")
+        return v
+
+
+class CustomDomainOut(BaseModel):
+    hostname: str
+    status: str
+    url: str | None = None
+    dns_configured: bool = False
+    # When DNS couldn't be written (usually a token missing Zone:DNS:Edit),
+    # these say why and give the exact record to add by hand. The domain is
+    # still registered — it just stays `pending` until DNS resolves.
+    dns_skipped_reason: str | None = None
+    manual_dns_record: str | None = None
 
 
 class CreateRepoResult(BaseModel):
@@ -453,6 +526,8 @@ class CreateRepoResult(BaseModel):
     initial_commit_pushed: bool
     pages: PagesProjectOut | None = None
     pages_skipped_reason: str | None = None
+    custom_domain: CustomDomainOut | None = None
+    custom_domain_skipped_reason: str | None = None
     pravi_repo_id: int | None = None
 
 

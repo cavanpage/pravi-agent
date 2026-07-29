@@ -6,7 +6,9 @@ from textwrap import dedent
 
 # Bumped to v2 when adding the `context_block` parameter so non-Claude
 # architects can pre-pack file context into the prompt.
-VERSION = "architect/v2"
+# Bumped from architect/v2: plans now carry an `## Acceptance criteria`
+# section, which the e2e leg turns into Playwright tests (ADR 0007).
+VERSION = "architect/v3"
 
 
 def system_prompt(
@@ -67,6 +69,18 @@ def system_prompt(
         File-by-file, what gets touched and what changes. Use bullets like:
           - `<path>`: <one-line description of the edit>
         If a new file is needed, list it here with the same format.
+
+        ## Acceptance criteria
+        User-observable statements a browser test can verify against the
+        deployed app. Each must be checkable by loading a URL and
+        interacting with the page — no implementation details, no HTTP
+        status codes, no DB state. Anchor on visible text or role, never on
+        CSS classes. Format as a checkbox list:
+          - [ ] Visiting `/reports` shows a table with a "Download CSV" button.
+          - [ ] Clicking "Download CSV" starts a download named `report.csv`.
+        Write 0–4. If the change has no user-visible surface (refactor,
+        config, docs, internal plumbing), write exactly:
+          _(none — not user-visible)_
 
         ## Tests
         How will this be verified? Reference the domain's test command if

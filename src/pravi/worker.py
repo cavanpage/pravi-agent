@@ -9,15 +9,28 @@ from temporalio.client import Client
 from temporalio.worker import Worker
 
 from pravi.activities.db_activity import (
+    emit_ticket_event,
     load_plan,
     load_ticket,
     synthesize_plan_from_body,
     update_ticket_status,
 )
 from pravi.activities.dev_activity import run_dev
+from pravi.activities.e2e_activity import run_e2e
 from pravi.activities.git_activity import create_worktree, remove_worktree, run_command
-from pravi.activities.pr_activity import push_and_open_pr
-from pravi.activities.sandbox_activity import cleanup_sandbox, provision_sandbox
+from pravi.activities.pr_activity import open_pr, push_and_open_pr, push_branch
+from pravi.activities.preview_activity import (
+    fetch_deployment_logs,
+    load_preview_config,
+    poll_preview_deployment,
+    record_preview_outcome,
+)
+from pravi.activities.sandbox_activity import (
+    cleanup_sandbox,
+    provision_sandbox,
+    sandbox_exec,
+    sandbox_head_sha,
+)
 from pravi.config import apply_anthropic_auth, get_settings
 from pravi.logging_setup import configure_logging
 from pravi.workflows.dev_workflow import DevWorkflow
@@ -53,11 +66,26 @@ def _resolve_queue(queue: Queue) -> tuple[str, list, list]:
                 # Sandbox-backed activities for FeatureWorkflow (see ADR 0003).
                 provision_sandbox,
                 cleanup_sandbox,
+                sandbox_exec,
+                sandbox_head_sha,
                 load_ticket,
                 load_plan,
                 synthesize_plan_from_body,
                 update_ticket_status,
+                emit_ticket_event,
+                # Deprecated one-shot path — kept registered because
+                # in-flight workflow histories still reference it.
                 push_and_open_pr,
+                # Deploy → e2e → repair loop (ADR 0007). All I/O-bound
+                # and token-free, so they belong here rather than on the
+                # cost-capped `llm` pool.
+                push_branch,
+                open_pr,
+                load_preview_config,
+                poll_preview_deployment,
+                fetch_deployment_logs,
+                record_preview_outcome,
+                run_e2e,
             ],
         )
     if queue == "llm":

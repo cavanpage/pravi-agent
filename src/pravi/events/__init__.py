@@ -19,6 +19,12 @@ Why LISTEN/NOTIFY rather than Temporal heartbeats or polling:
 Channel naming: ``pravi_ticket_{ticket_id}`` (per-ticket fan-out).
 """
 from pravi.events.emit import (
+    KIND_E2E_FINISHED,
+    KIND_E2E_STARTED,
+    KIND_PREVIEW_FAILED,
+    KIND_PREVIEW_READY,
+    KIND_PREVIEW_WAITING,
+    KIND_REPAIR_STARTED,
     KIND_RUN_FINISHED,
     KIND_RUN_STARTED,
     channel_for_ticket,
@@ -27,6 +33,12 @@ from pravi.events.emit import (
 from pravi.events.listen import listen_events, listen_events_many
 
 __all__ = [
+    "KIND_E2E_FINISHED",
+    "KIND_E2E_STARTED",
+    "KIND_PREVIEW_FAILED",
+    "KIND_PREVIEW_READY",
+    "KIND_PREVIEW_WAITING",
+    "KIND_REPAIR_STARTED",
     "KIND_RUN_FINISHED",
     "KIND_RUN_STARTED",
     "channel_for_ticket",

@@ -9,13 +9,15 @@ can pass them across the workflow ↔ activity boundary.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import structlog
 from temporalio import activity
 
 from pravi.agents.sandbox.factory import get_sandbox
 from pravi.agents.sandbox.protocols import (
+    SandboxExecRequest,
+    SandboxExecResult,
     SandboxHandle,
     SandboxProvisionRequest,
 )
@@ -66,3 +68,50 @@ async def provision_sandbox(req: ProvisionRequest) -> SandboxHandle:
 async def cleanup_sandbox(req: CleanupRequest) -> None:
     sandbox = get_sandbox()
     await sandbox.cleanup(req.handle, delete_branch=req.delete_branch)
+
+
+@dataclass
+class ExecRequest:
+    """Workflow-facing exec input. Flattened rather than embedding a
+    `SandboxExecRequest` so the Temporal payload stays a plain struct."""
+
+    handle: SandboxHandle
+    command: list[str]
+    cwd_rel: str = ""
+    env: dict[str, str] = field(default_factory=dict)
+    timeout_seconds: int = 900
+    max_output_bytes: int = 1_000_000
+
+
+@activity.defn
+async def sandbox_exec(req: ExecRequest) -> SandboxExecResult:
+    """Run a command inside a provisioned sandbox (ADR 0007).
+
+    Non-zero exits are data, not errors — the caller inspects `exit_code`.
+    """
+    sandbox = get_sandbox()
+    result = await sandbox.exec(
+        req.handle,
+        SandboxExecRequest(
+            command=list(req.command),
+            cwd_rel=req.cwd_rel,
+            env=dict(req.env),
+            timeout_seconds=req.timeout_seconds,
+            max_output_bytes=req.max_output_bytes,
+        ),
+    )
+    log.info(
+        "sandbox.exec",
+        sandbox_id=req.handle.sandbox_id,
+        command=req.command[:4],
+        exit_code=result.exit_code,
+        timed_out=result.timed_out,
+        duration_ms=result.duration_ms,
+    )
+    return result
+
+
+@activity.defn
+async def sandbox_head_sha(handle: SandboxHandle) -> str | None:
+    sandbox = get_sandbox()
+    return await sandbox.head_sha(handle)

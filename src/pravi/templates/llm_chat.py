@@ -22,6 +22,10 @@ from pravi.templates.manifest import DeploySpec, TemplateManifest, render_files
 from pravi.templates.vite_react_static import (
     _INDEX_CSS,
     _MAIN_TSX,
+    _PLAYWRIGHT_CONFIG,
+    _PREVIEW_BLOCK,
+    _README_E2E,
+    _SMOKE_SPEC,
     _TSCONFIG,
     _TSCONFIG_APP,
     _VITE_CONFIG,
@@ -41,13 +45,16 @@ _PACKAGE_JSON = """\
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "e2e": "playwright test",
+    "e2e:ui": "playwright test --ui"
   },
   "dependencies": {
     "react": "^18.3.1",
     "react-dom": "^18.3.1"
   },
   "devDependencies": {
+    "@playwright/test": "^1.50.0",
     "@types/react": "^18.3.12",
     "@types/react-dom": "^18.3.1",
     "@vitejs/plugin-react": "^4.3.3",
@@ -125,7 +132,10 @@ export default function App() {
   }
 
   return (
-    <main className="min-h-screen flex flex-col bg-gradient-to-br from-slate-950 to-slate-900 text-slate-100">
+    <main
+      data-testid="app-root"
+      className="min-h-screen flex flex-col bg-gradient-to-br from-slate-950 to-slate-900 text-slate-100"
+    >
       <header className="px-6 py-4 border-b border-white/10">
         <div className="text-xs uppercase tracking-[0.18em] text-slate-500">
           %PROJECT_NAME%
@@ -145,6 +155,7 @@ export default function App() {
         {messages.map((m, i) => (
           <div
             key={i}
+            data-testid={m.role === "user" ? "user-message" : "assistant-message"}
             className={
               m.role === "user"
                 ? "ml-auto max-w-[80%] rounded-2xl rounded-br-sm bg-blue-500/20 px-4 py-2 text-sm"
@@ -158,7 +169,10 @@ export default function App() {
       </div>
 
       {quotaHit && (
-        <div className="mx-6 mb-2 rounded-xl border border-amber-400/25 bg-amber-400/[0.06] px-4 py-2 text-sm text-amber-300">
+        <div
+          data-testid="quota-banner"
+          className="mx-6 mb-2 rounded-xl border border-amber-400/25 bg-amber-400/[0.06] px-4 py-2 text-sm text-amber-300"
+        >
           Daily free-tier limit reached — Workers AI allows 10,000 neurons/day
           per account, resetting at 00:00 UTC. Try again tomorrow.
         </div>
@@ -177,6 +191,7 @@ export default function App() {
         }}
       >
         <input
+          data-testid="chat-input"
           value={input}
           onChange={(e) => setInput(e.target.value)}
           placeholder={quotaHit ? "quota resets at 00:00 UTC" : "Ask anything…"}
@@ -184,6 +199,7 @@ export default function App() {
           className="flex-1 rounded-xl bg-white/[0.04] border border-white/10 px-4 py-2.5 text-sm placeholder-slate-600 focus:outline-none focus:border-blue-400/40 disabled:opacity-60"
         />
         <button
+          data-testid="chat-send"
           type="submit"
           disabled={busy || quotaHit || input.trim().length === 0}
           className="rounded-xl bg-blue-500/80 hover:bg-blue-500 px-5 py-2.5 text-sm font-medium disabled:opacity-40 transition"
@@ -312,6 +328,36 @@ dist/
 .env
 .env.local
 *.log
+test-results/
+playwright-report/
+blob-report/
+playwright/.cache/
+"""
+
+# The chat spec is deliberately tolerant of the free tier: a 429 is an
+# expected outcome, not a product bug. Asserting that a reply ALWAYS
+# arrives would make every llm-chat repo burn its whole repair budget on
+# a quota error the agent cannot fix.
+_CHAT_SPEC = """\
+import { expect, test } from "@playwright/test";
+
+test("chat composer renders", async ({ page }) => {
+  await page.goto("/");
+  await expect(page.getByTestId("chat-input")).toBeVisible();
+  await expect(page.getByTestId("chat-send")).toBeVisible();
+});
+
+test("sending a message yields a reply or a quota notice", async ({ page }) => {
+  await page.goto("/");
+  await page.getByTestId("chat-input").fill("hello");
+  await page.getByTestId("chat-send").click();
+  // Workers AI's free tier is 10k neurons/day account-wide. Either the
+  // model answers or the app tells the user the quota is gone — both are
+  // correct behavior; silently breaking is not.
+  await expect(
+    page.getByTestId("assistant-message").or(page.getByTestId("quota-banner")),
+  ).toBeVisible({ timeout: 30_000 });
+});
 """
 
 _DOMAINS_YAML = """\
@@ -343,6 +389,7 @@ domains:
       - "README.md"
       - "functions/api/chat.ts"
 """
+_DOMAINS_YAML += _PREVIEW_BLOCK
 
 _README = """\
 # %PROJECT_NAME%
@@ -400,6 +447,7 @@ Open this repo as an epic in pravi — the `frontend` domain covers the
 UI, the `api` domain covers the Function. Each merged PR triggers a
 Pages redeploy.
 """
+_README += _README_E2E
 
 
 def render(*, project_name: str, repo_full_name: str) -> TemplateManifest:
@@ -413,6 +461,9 @@ def render(*, project_name: str, repo_full_name: str) -> TemplateManifest:
         "src/main.tsx": _MAIN_TSX,
         "src/App.tsx": _APP_TSX,
         "src/index.css": _INDEX_CSS,
+        "playwright.config.ts": _PLAYWRIGHT_CONFIG,
+        "e2e/smoke.spec.ts": _SMOKE_SPEC,
+        "e2e/chat.spec.ts": _CHAT_SPEC,
         "functions/api/chat.ts": _CHAT_FUNCTION.replace("%MODEL%", _MODEL),
         "wrangler.toml": _WRANGLER_TOML,
         ".gitignore": _GITIGNORE,

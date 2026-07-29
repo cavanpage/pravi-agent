@@ -13,3 +13,8 @@ domains:
     test: "cd web && npx tsc --noEmit"
     build: "cd web && npx vite build"
     context_files: ["web/package.json"]
+
+# No `preview:` block here on purpose: pravi itself is a Python service, not
+# a Cloudflare Pages site, so there's nothing to deploy to an ephemeral
+# preview. See docs/user-guide/acceptance-criteria-and-e2e.md for repos that
+# should opt in.

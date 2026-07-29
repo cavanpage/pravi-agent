@@ -1,7 +1,13 @@
 import { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
-import { api, CreateRepoResult, GitHubRepoResult, TemplateInfo } from "../lib/api";
+import {
+  api,
+  CreateRepoResult,
+  type CustomDomain,
+  GitHubRepoResult,
+  TemplateInfo,
+} from "../lib/api";
 import { CloudflareConnectModal } from "./CloudflareConnectModal";
 
 /** Modal for the "create new repo + template + (optional) Cloudflare
@@ -33,6 +39,7 @@ export function CreateRepoModal({
   const [isPrivate, setIsPrivate] = useState(defaultPrivate);
   const [template, setTemplate] = useState("vite-react-static");
   const [deployToPages, setDeployToPages] = useState(true);
+  const [customDomain, setCustomDomain] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [showCfConnect, setShowCfConnect] = useState(false);
 
@@ -61,6 +68,10 @@ export function CreateRepoModal({
         private: isPrivate,
         template,
         deploy_to_cloudflare_pages: deployToPages && cfConfigured,
+        custom_domain:
+          deployToPages && cfConfigured && customDomain.trim()
+            ? customDomain.trim()
+            : null,
         register_in_pravi: true,
       }),
     onSuccess: () => {
@@ -123,6 +134,8 @@ export function CreateRepoModal({
             templates={templatesQ.data ?? null}
             deployToPages={deployToPages}
             setDeployToPages={setDeployToPages}
+            customDomain={customDomain}
+            setCustomDomain={setCustomDomain}
             cfConfigured={cfConfigured}
             cfLoading={integrationsQ.isLoading}
             onConnectCloudflare={() => setShowCfConnect(true)}
@@ -191,6 +204,8 @@ function FormPanel(props: {
   templates: TemplateInfo[] | null;
   deployToPages: boolean;
   setDeployToPages: (v: boolean) => void;
+  customDomain: string;
+  setCustomDomain: (v: string) => void;
   cfConfigured: boolean;
   cfLoading: boolean;
   onConnectCloudflare: () => void;
@@ -201,6 +216,7 @@ function FormPanel(props: {
     isPrivate, setIsPrivate,
     template, setTemplate, templates,
     deployToPages, setDeployToPages,
+    customDomain, setCustomDomain,
     cfConfigured, cfLoading,
     onConnectCloudflare,
   } = props;
@@ -322,7 +338,26 @@ function FormPanel(props: {
               </span>
             ) : null}
           </label>
-        ) : (
+        ) : null}
+
+        {cfConfigured && deployToPages ? (
+          <div className="mt-3">
+            <input
+              type="text"
+              value={customDomain}
+              onChange={(e) => setCustomDomain(e.target.value)}
+              placeholder="app.yourdomain.com (optional)"
+              className="w-full rounded-xl bg-white/[0.04] border border-white/10 px-3.5 py-2.5 text-sm placeholder-neutral-600 focus:outline-none focus:border-blue-400/40"
+            />
+            <p className="text-[11px] text-neutral-500 mt-1.5 leading-relaxed">
+              Custom domain for the production site. The domain must already
+              be a zone in this Cloudflare account. Preview deployments always
+              stay on <span className="font-mono">*.pages.dev</span>.
+            </p>
+          </div>
+        ) : null}
+
+        {!cfConfigured ? (
           <div className="rounded-xl border border-white/10 bg-white/[0.02] px-3.5 py-3 flex items-center gap-3 flex-wrap">
             <div className="flex-1 min-w-0">
               <div className="text-sm text-neutral-200">
@@ -346,7 +381,7 @@ function FormPanel(props: {
               connect cloudflare →
             </button>
           </div>
-        )}
+        ) : null}
       </Field>
 
       <div className="text-[11px] text-neutral-500 leading-relaxed">
@@ -402,12 +437,71 @@ function ResultPanel({ result }: { result: CreateRepoResult }) {
           <span className="text-neutral-400">{result.pages_skipped_reason}</span>
         </ResultRow>
       ) : null}
+      {result.custom_domain ? (
+        <CustomDomainRow domain={result.custom_domain} />
+      ) : result.custom_domain_skipped_reason ? (
+        <ResultRow ok={null}>
+          <span className="text-amber-300">Custom domain skipped:</span>{" "}
+          <span className="text-neutral-400">
+            {result.custom_domain_skipped_reason}
+          </span>
+        </ResultRow>
+      ) : null}
       {result.pravi_repo_id ? (
         <ResultRow ok={true}>
           registered in pravi — ready to use as a ticket target
         </ResultRow>
       ) : null}
     </div>
+  );
+}
+
+/** Custom domain outcome. The degraded path (DNS not writable) is still a
+ * useful one — the domain IS registered, it just needs one record — so it
+ * renders as an actionable amber card rather than a failure. */
+function CustomDomainRow({ domain }: { domain: CustomDomain }) {
+  const live = domain.dns_configured && domain.status === "active";
+  return (
+    <ResultRow ok={domain.dns_configured ? true : null}>
+      <span className="text-neutral-500">Custom domain:</span>{" "}
+      <a
+        href={domain.url ?? `https://${domain.hostname}`}
+        target="_blank"
+        rel="noreferrer"
+        className={`hover:underline font-mono ${
+          domain.dns_configured ? "text-emerald-300" : "text-amber-300"
+        }`}
+      >
+        {domain.hostname}
+      </a>{" "}
+      <span className="text-[11px] text-neutral-500">({domain.status})</span>
+      {domain.dns_configured ? (
+        <div className="text-[11px] text-neutral-500 mt-0.5">
+          {live
+            ? "DNS is pointed at the Pages project."
+            : "DNS is set; the certificate usually issues within a few minutes."}
+        </div>
+      ) : (
+        <div className="mt-1.5">
+          <div className="text-[11px] text-amber-200/90 leading-relaxed">
+            {domain.dns_skipped_reason}
+          </div>
+          {domain.manual_dns_record ? (
+            <button
+              type="button"
+              onClick={() =>
+                navigator.clipboard?.writeText(domain.manual_dns_record ?? "")
+              }
+              title="copy the DNS record"
+              className="mt-1.5 w-full text-left rounded-lg bg-white/[0.04] border border-white/10 px-2.5 py-1.5 font-mono text-[11px] text-neutral-300 hover:border-white/20 transition"
+            >
+              {domain.manual_dns_record}
+              <span className="text-neutral-600 ml-2">⧉ copy</span>
+            </button>
+          ) : null}
+        </div>
+      )}
+    </ResultRow>
   );
 }
 

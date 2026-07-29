@@ -120,7 +120,14 @@ class RunCommandResult:
 
 @activity.defn
 async def run_command(req: RunCommandRequest) -> RunCommandResult:
-    """Run a shell command in a worktree and capture output."""
+    """Run a shell command in a worktree and capture output.
+
+    DEPRECATED — legacy host-subprocess exec, used only by SmokeWorkflow's
+    raw `--repo` path. It takes a bare `cwd` with no `SandboxHandle`, which
+    is exactly the host-filesystem assumption ADR 0003 forbids.
+    Sandbox-backed callers must use `sandbox_exec` (ADR 0007). Delete this
+    alongside SmokeWorkflow.
+    """
     try:
         code, out, err = await asyncio.wait_for(
             _run(req.command, cwd=Path(req.cwd)),

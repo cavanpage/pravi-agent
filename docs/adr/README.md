@@ -12,3 +12,4 @@ ADRs supersede older ones explicitly (status: Superseded by 000N).
 | 0004 | [Agent personas](0004-agent-personas.md)                                             | Accepted |
 | 0005 | [No vector-similarity RAG (deterministic retrieval only)](0005-no-rag-tool-use-and-explicit-context.md) | Accepted |
 | 0006 | [Deploy targets and LLM-app templates](0006-deploy-targets-and-llm-app-templates.md) | Accepted |
+| 0007 | [Ephemeral previews and the e2e repair loop](0007-ephemeral-previews-and-e2e-repair-loop.md) | Accepted |

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import uuid
 from dataclasses import dataclass
@@ -43,12 +44,14 @@ from pravi.api.schemas import (
     DecomposeApproveRequest,
     DecomposeDraftRequest,
     DomainOut,
+    E2EFailureOut,
     PersistedClarificationOut,
     PersonaOut,
     PersonaSpendOut,
     PlanApproveOut,
     PlanApproveRequest,
     PlanDraftRequest,
+    PreviewOut,
     RepoOut,
     RoadmapFeatureOut,
     RoadmapOut,
@@ -80,6 +83,7 @@ from pravi.db.models import (
     Plan,
     Repo,
     Run,
+    RunKind,
     Ticket,
     TicketKind,
     TicketStatus,
@@ -91,6 +95,7 @@ from pravi.personas import ALL_PERSONAS, KNOWN_STACKS
 from pravi.services import agent_draft as draft_service
 from pravi.services import clarification as clarification_service
 from pravi.services import github as gh
+from pravi.specs.acceptance import render_task_body
 from pravi.temporal_utils import (
     DOMAIN,
     PRAVI_STATUS,
@@ -187,6 +192,11 @@ async def _child_task_status_counts(
 # without hitting the DB.
 _DEV_ACTIVE = ("planning", "plan_approved", "in_progress")
 _DEV_DONE = ("pr_open", "merged")
+
+# How many of a ticket's events to replay when a client (re)connects to the
+# run stream. A repair loop spans several runs, so the replay is scoped to
+# the ticket rather than its latest run — this bounds that.
+_RUN_STREAM_REPLAY_LIMIT = 400
 
 
 def _derive_parent_status(counts: dict[str, int]) -> str | None:
@@ -311,6 +321,8 @@ def _ticket_to_out(
         persona=ticket.persona,
         stack=ticket.stack,
         child_status_counts=counts,
+        preview_url=ticket.preview_url,
+        e2e_verdict=ticket.e2e_verdict,
     )
 
 
@@ -401,6 +413,77 @@ async def get_ticket(external_id: str) -> TicketOut:
 async def list_children(external_id: str) -> list[TicketOut]:
     """Direct children of a ticket (epic → features, feature → tasks)."""
     return await list_tickets(parent_external_id=external_id, limit=500)
+
+
+@router.get("/tickets/{external_id}/preview", response_model=PreviewOut)
+async def get_preview(external_id: str) -> PreviewOut:
+    """Deploy + end-to-end report for one ticket (ADR 0007).
+
+    Powers the <E2EPanel> on the ticket page. Pure DB read — the verdict
+    and URL live on the Ticket row, the detail on the newest tester Run's
+    transcript — so no Cloudflare call is involved and this is cheap
+    enough to poll.
+    """
+    ticket, repo = await _get_ticket_and_repo(external_id)
+
+    async with session_scope() as session:
+        run = (
+            await session.execute(
+                select(Run)
+                .where(Run.ticket_id == ticket.id, Run.kind == RunKind.tester)
+                .order_by(Run.id.desc())
+                .limit(1)
+            )
+        ).scalar_one_or_none()
+        attempts = (
+            await session.execute(
+                select(func.count(Run.id)).where(
+                    Run.ticket_id == ticket.id, Run.kind == RunKind.tester
+                )
+            )
+        ).scalar_one() or 0
+        detail: dict = {}
+        run_id: int | None = None
+        if run is not None:
+            run_id = run.id
+            if run.transcript:
+                try:
+                    detail = json.loads(run.transcript)
+                except (TypeError, ValueError):
+                    detail = {}
+
+    production_url: str | None = None
+    if repo.cf_custom_domain:
+        production_url = f"https://{repo.cf_custom_domain}"
+    elif repo.cf_pages_project:
+        production_url = f"https://{repo.cf_pages_project}.pages.dev"
+
+    return PreviewOut(
+        preview_url=ticket.preview_url,
+        e2e_verdict=ticket.e2e_verdict,
+        e2e_attempts=int(attempts),
+        last_e2e_run_id=run_id,
+        ran=bool(detail.get("ran")),
+        passed=bool(detail.get("passed")),
+        stage=detail.get("stage"),
+        total=int(detail.get("total") or 0),
+        passed_count=int(detail.get("passed_count") or 0),
+        failed_count=int(detail.get("failed_count") or 0),
+        skipped_count=int(detail.get("skipped_count") or 0),
+        failures=[
+            E2EFailureOut(
+                title=f.get("title") or "",
+                file=f.get("file") or "",
+                line=f.get("line"),
+                message=f.get("message") or "",
+                snippet=f.get("snippet"),
+            )
+            for f in (detail.get("failures") or [])
+        ],
+        error=detail.get("error"),
+        pages_project=repo.cf_pages_project,
+        production_url=production_url,
+    )
 
 
 @router.get("/tickets/{external_id}/cost-rollup", response_model=CostRollupOut)
@@ -1489,7 +1572,10 @@ async def decompose_approve(
                     repo_id=repo.id,
                     external_id=t_ext_id,
                     title=t.title,
-                    body=t.description,
+                    # Acceptance criteria are appended to the body rather
+                    # than stored separately — the body is what flows into
+                    # the plan and the dev prompt (ADR 0007).
+                    body=render_task_body(t.description, t.acceptance),
                     domain_name=f_domain,
                     status=TicketStatus.pending,
                     kind=TicketKind.task,
@@ -2336,30 +2422,21 @@ async def run_stream(external_id: str):
         # event emitted in that window would be lost. Inside the `async with`
         # the connection is already subscribed.
         async with listen_events(ticket_id) as queue:
-            # Find the most recent run for this ticket; replay its events.
+            # Replay the ticket's recent events, NOT just the latest run's.
+            # A repair loop (ADR 0007) produces dev → tester → dev runs, so
+            # scoping to the newest run would make a refresh mid-loop show
+            # only the e2e events and drop the dev history that explains
+            # them. Same shape as `run_subtree_stream`.
             async with session_scope() as session:
-                latest_run_id = (
-                    await session.execute(
-                        select(Run.id)
-                        .where(Run.ticket_id == ticket_id)
-                        .order_by(Run.id.desc())
-                        .limit(1)
-                    )
-                ).scalar_one_or_none()
-
-                replay: list[Event] = []
-                if latest_run_id is not None:
-                    rows = await session.execute(
-                        select(Event)
-                        .where(
-                            Event.ticket_id == ticket_id,
-                            Event.run_id == latest_run_id,
-                        )
-                        .order_by(Event.id.asc())
-                    )
-                    replay = list(rows.scalars().all())
-                    for r in replay:
-                        session.expunge(r)
+                rows = await session.execute(
+                    select(Event)
+                    .where(Event.ticket_id == ticket_id)
+                    .order_by(Event.id.desc())
+                    .limit(_RUN_STREAM_REPLAY_LIMIT)
+                )
+                replay = list(reversed(rows.scalars().all()))
+                for r in replay:
+                    session.expunge(r)
 
             last_yielded_id = 0
             saw_finished = False
@@ -2369,7 +2446,7 @@ async def run_stream(external_id: str):
                     "event": "run",
                     "data": _event_to_out(evt).model_dump_json(),
                 }
-                if evt.kind == KIND_RUN_FINISHED:
+                if _is_terminal_finish(evt):
                     saw_finished = True
 
             if saw_finished:
@@ -2391,11 +2468,26 @@ async def run_stream(external_id: str):
                     "event": "run",
                     "data": _event_to_out(evt).model_dump_json(),
                 }
-                if evt.kind == KIND_RUN_FINISHED:
+                if _is_terminal_finish(evt):
                     yield {"event": "close", "data": "{}"}
                     return
 
     return EventSourceResponse(event_gen())
+
+
+def _is_terminal_finish(evt: Event) -> bool:
+    """Should this event close the live stream?
+
+    Only a `run_finished` that says it's the last one. Mid-loop dev runs
+    set `terminal: false` so the panel stays open across repair iterations
+    (ADR 0007); events written before that flag existed have no key and
+    default to True, preserving the original behavior exactly. Tester runs
+    deliberately never emit `run_finished` at all.
+    """
+    if evt.kind != KIND_RUN_FINISHED:
+        return False
+    payload = evt.payload or {}
+    return bool(payload.get("terminal", True))
 
 
 def _event_to_out(
