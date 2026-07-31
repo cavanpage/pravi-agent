@@ -5,6 +5,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, Persona, Ticket, TicketKind } from "../lib/api";
 import { SortKey, useHomeViewState } from "../lib/useHomeViewState";
 import { ChildStatusChips } from "../components/ChildStatusChips";
+import { CloudflareConnectButton } from "../components/CloudflareConnectButton";
 import { GitHubConnectButton } from "../components/GitHubConnectButton";
 import { PersonaChip } from "../components/PersonaChip";
 import { PersonaSpendCard } from "../components/PersonaSpendCard";
@@ -204,6 +205,7 @@ export function HomePage() {
             </span>
           ) : null}
           <GitHubConnectButton />
+          <CloudflareConnectButton />
           <Link
             to="/issues"
             className="px-3 py-1.5 rounded-full bg-white/5 hover:bg-white/10 border border-white/10 text-sm font-medium transition"
