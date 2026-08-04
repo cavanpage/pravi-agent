@@ -66,6 +66,11 @@ class PreviewConfig(BaseModel):
 class DomainsFile(BaseModel):
     domains: list[Domain] = Field(min_length=1)
     preview: PreviewConfig | None = None
+    # Preset pravi skills granted to every dev run on this repo — how a
+    # repo tells pravi about its deployment/platform reality (e.g.
+    # "cloudflare-deploy", "workers-ai"). Validated against the catalog
+    # in `pravi.skills` so a typo fails at load, not silently at run.
+    skills: list[str] = Field(default_factory=list)
 
     @field_validator("domains")
     @classmethod
@@ -75,6 +80,17 @@ class DomainsFile(BaseModel):
             if d.name in seen:
                 raise ValueError(f"duplicate domain name: {d.name}")
             seen.add(d.name)
+        return v
+
+    @field_validator("skills")
+    @classmethod
+    def _known_skills(cls, v: list[str]) -> list[str]:
+        from pravi.skills import available_skills
+
+        known = set(available_skills())
+        unknown = [s for s in v if s not in known]
+        if unknown:
+            raise ValueError(f"unknown skills {unknown!r}; available: {sorted(known)}")
         return v
 
 

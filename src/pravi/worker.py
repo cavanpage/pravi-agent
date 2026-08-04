@@ -18,7 +18,12 @@ from pravi.activities.db_activity import (
 from pravi.activities.dev_activity import run_dev
 from pravi.activities.e2e_activity import run_e2e
 from pravi.activities.git_activity import create_worktree, remove_worktree, run_command
-from pravi.activities.pr_activity import open_pr, push_and_open_pr, push_branch
+from pravi.activities.pr_activity import (
+    check_pr_state,
+    open_pr,
+    push_and_open_pr,
+    push_branch,
+)
 from pravi.activities.preview_activity import (
     fetch_deployment_logs,
     load_preview_config,
@@ -81,6 +86,7 @@ def _resolve_queue(queue: Queue) -> tuple[str, list, list]:
                 # cost-capped `llm` pool.
                 push_branch,
                 open_pr,
+                check_pr_state,
                 load_preview_config,
                 poll_preview_deployment,
                 fetch_deployment_logs,

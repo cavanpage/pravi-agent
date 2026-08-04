@@ -279,6 +279,12 @@ domains:
       - "src/App.tsx"
 """
 _DOMAINS_YAML += _PREVIEW_BLOCK
+_DOMAINS_YAML += """\
+
+# Preset pravi skills granted to every dev agent run on this repo.
+skills:
+  - cloudflare-deploy
+"""
 
 _README = """\
 # %PROJECT_NAME%

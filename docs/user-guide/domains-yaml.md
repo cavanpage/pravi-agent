@@ -34,6 +34,18 @@ domains:
 | `build` | no | Shell command to build the domain, when that's distinct from `test`. |
 | `context_files` | no | Repo-relative files that best explain the domain — a README, the main entry point, a schema. Curation metadata: the Claude architect explores the repo with its own Read/Grep tools, so today this list is advisory (it rides along on agent requests for future prompt use). |
 
+There is also one **top-level** (not per-domain) field:
+
+| Field | Required | What it does |
+|---|---|---|
+| `skills` | no | Preset pravi skills granted to every dev-agent run on this repo — how the repo tells pravi about its deployment/platform reality. Available today: `cloudflare-deploy` (Pages builds, wrangler.toml, Functions), `workers-ai` (AI binding, model catalog, quota handling). Each is a real Agent Skill (`SKILL.md` with pointers at current Cloudflare docs) loaded into the dev agent via a claude-agent-sdk plugin — the agent's sandboxed settings stay hermetic. Unknown slugs fail validation at load. Templates pre-fill this list. |
+
+```yaml
+skills:
+  - cloudflare-deploy
+  - workers-ai
+```
+
 Validation happens at load time (`src/pravi/domains/registry.py`,
 pydantic-backed): a missing file, an empty `domains:` list, a non-slug name,
 duplicate names, or an empty `paths` list all fail fast with a clear error.

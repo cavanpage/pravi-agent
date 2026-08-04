@@ -298,6 +298,11 @@ Per-run hard limits (wall clock, turns, $ budget) for the dev agent come from
    branch and opens a PR (`pr_open`) when commits exist + GitHub is
    connected. PRs open ready-for-review by default
    (`PRAVI_PR_OPEN_AS_DRAFT=true` for drafts).
+5. The workflow then **watches the PR** (durable Temporal timers, backing-off
+   polls for up to ~7 days): merge it and the ticket flips to `merged`; close
+   it unmerged and the ticket is `cancelled`. An open PR does NOT count as
+   done — dependent features in the roadmap unblock on `merged`, and the
+   home page shows these tickets under "In review".
 5. If the ticket carries acceptance criteria **and** the repo has a `preview:`
    block in `.builder/domains.yaml`, the workflow then loops: wait for the
    Cloudflare preview of the pushed commit → run the Playwright suite against

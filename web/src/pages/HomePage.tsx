@@ -2,8 +2,8 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
-import { api, Persona, Ticket, TicketKind } from "../lib/api";
-import { SortKey, useHomeViewState } from "../lib/useHomeViewState";
+import { api, Persona, Ticket } from "../lib/api";
+import { KindFilter, SortKey, useHomeViewState } from "../lib/useHomeViewState";
 import { ChildStatusChips } from "../components/ChildStatusChips";
 import { CloudflareConnectButton } from "../components/CloudflareConnectButton";
 import { GitHubConnectButton } from "../components/GitHubConnectButton";
@@ -14,8 +14,11 @@ import { StatusBadge } from "../components/StatusBadge";
 
 // Tickets in these statuses need human action on the plan.
 const NEEDS_REVIEW = new Set(["planning"]);
-// Closed states.
-const CLOSED = new Set(["pr_open", "merged", "failed", "cancelled"]);
+// A PR is open and waiting for a human merge. NOT closed — the ticket
+// only closes when the PR merges (the workflow flips it to `merged`).
+const IN_REVIEW = new Set(["pr_open"]);
+// Truly settled states.
+const CLOSED = new Set(["merged", "failed", "cancelled"]);
 
 // Status sort order — earlier in the lifecycle first so "by status" surfaces
 // what's blocking next.
@@ -69,10 +72,10 @@ export function HomePage() {
   const qc = useQueryClient();
 
   // View state (kind / sort / search) lives in a reducer so the choice
-  // survives navigation — `inFlightKind` and `sortBy` are persisted to
+  // survives navigation — `kindFilter` and `sortBy` are persisted to
   // localStorage; `search` stays ephemeral to avoid stale-filter surprises.
   const { state: view, setKind, setSort, setSearch } = useHomeViewState();
-  const { inFlightKind, sortBy, search } = view;
+  const { kindFilter, sortBy, search } = view;
 
   // Bulk-select state. Selecting any row reveals a sticky action bar at
   // the bottom of the viewport for deleting in batch.
@@ -146,45 +149,47 @@ export function HomePage() {
   }
 
   const tickets = ticketsQ.data ?? [];
-  // "Needs review" is task-specific (only tasks transition to `planning`).
+  // ONE filter, applied to EVERY section identically: kind + search.
+  // Nothing on this page is ever hidden by a filter that only applies to
+  // some sections — that was the old design's main confusion.
+  const visible = (t: Ticket) =>
+    (kindFilter === "all" || t.kind === kindFilter) && matchesSearch(t, search);
+
   const needsReview = tickets.filter(
-    (t) =>
-      NEEDS_REVIEW.has(t.status) &&
-      t.kind === "task" &&
-      matchesSearch(t, search),
+    (t) => NEEDS_REVIEW.has(t.status) && visible(t),
   );
-  // "Closed" matches the selected kind so the view stays coherent.
-  const closed = sortTickets(
-    tickets.filter(
-      (t) =>
-        CLOSED.has(t.status) &&
-        t.kind === inFlightKind &&
-        matchesSearch(t, search),
-    ),
+  // Open PRs waiting on a human merge — actionable, so they get their own
+  // section instead of hiding inside "Closed".
+  const inReview = sortTickets(
+    tickets.filter((t) => IN_REVIEW.has(t.status) && visible(t)),
     sortBy,
   );
-  // "In flight" = of selected kind, anything not closed and not awaiting
-  // review (those have their own section above).
+  const closed = sortTickets(
+    tickets.filter((t) => CLOSED.has(t.status) && visible(t)),
+    sortBy,
+  );
+  // Everything else that's alive: pending / plan_approved / in_progress.
   const inFlight = useMemo(
     () =>
       sortTickets(
         tickets.filter(
           (t) =>
-            t.kind === inFlightKind &&
             !CLOSED.has(t.status) &&
+            !IN_REVIEW.has(t.status) &&
             !NEEDS_REVIEW.has(t.status) &&
-            matchesSearch(t, search),
+            visible(t),
         ),
         sortBy,
       ),
-    [tickets, inFlightKind, sortBy, search],
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [tickets, kindFilter, sortBy, search],
   );
 
   // Enter in the search box jumps to a ticket if exactly one match remains
   // across all sections — preserves the muscle memory of the old jump-to form.
   const searchSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    const matches = [...needsReview, ...inFlight, ...closed];
+    const matches = [...needsReview, ...inReview, ...inFlight, ...closed];
     if (matches.length === 1) {
       nav(`/tickets/${encodeURIComponent(matches[0].external_id)}`);
     }
@@ -238,7 +243,7 @@ export function HomePage() {
         search={search}
         onSearch={setSearch}
         onSubmit={searchSubmit}
-        kind={inFlightKind}
+        kind={kindFilter}
         onKindChange={setKind}
         sort={sortBy}
         onSortChange={setSort}
@@ -259,51 +264,33 @@ export function HomePage() {
         personaCatalog={personaCatalog}
       />
 
-      <section className="mt-8">
-        <div className="flex items-center gap-2 mb-3">
-          <SelectAllCheckbox
-            tickets={inFlight}
-            selected={selected}
-            onToggleAll={toggleMany}
-          />
-          <h2 className="text-[11px] uppercase tracking-[0.14em] font-semibold text-neutral-500 flex items-center gap-2">
-            In flight
-            <span className="text-neutral-600 normal-case tracking-normal font-normal">
-              ({inFlight.length})
-            </span>
-          </h2>
-        </div>
-        {inFlight.length === 0 ? (
-          <p className="text-sm text-neutral-600 italic">
-            {search
-              ? `No matching ${inFlightKind === "task" ? "tasks" : `${inFlightKind}s`}.`
-              : `No ${inFlightKind === "task" ? "tasks" : `${inFlightKind}s`} in progress.`}
-          </p>
-        ) : (
-          <ul className="flex flex-col gap-1.5">
-            {inFlight.map((t) => (
-              <TicketRow
-                key={t.id}
-                ticket={t}
-                selected={selected.has(t.external_id)}
-                onToggleSelected={toggleSelected}
-                personaCatalog={personaCatalog}
-              />
-            ))}
-          </ul>
-        )}
-      </section>
-
-      <PersonaSpendCard personaCatalog={personaCatalog} />
-      <StackSpendCard stackCatalog={stackCatalog} />
+      <Section
+        title="In review — PR open, waiting to merge"
+        empty={
+          search ? "No matching tickets in review." : "No open PRs right now."
+        }
+        tickets={inReview}
+        selected={selected}
+        onToggleSelected={toggleSelected}
+        onToggleAll={toggleMany}
+        personaCatalog={personaCatalog}
+      />
 
       <Section
-        title={`Closed ${inFlightKind === "task" ? "tasks" : `${inFlightKind}s`}`}
+        title="In flight"
         empty={
-          search
-            ? `No matching closed ${inFlightKind === "task" ? "tasks" : `${inFlightKind}s`}.`
-            : `No closed ${inFlightKind === "task" ? "tasks" : `${inFlightKind}s`} yet.`
+          search ? "No matching tickets in flight." : "Nothing in progress."
         }
+        tickets={inFlight}
+        selected={selected}
+        onToggleSelected={toggleSelected}
+        onToggleAll={toggleMany}
+        personaCatalog={personaCatalog}
+      />
+
+      <Section
+        title="Closed"
+        empty={search ? "No matching closed tickets." : "No closed tickets yet."}
         tickets={closed}
         collapsible
         forceOpen={Boolean(search)}
@@ -312,6 +299,9 @@ export function HomePage() {
         onToggleAll={toggleMany}
         personaCatalog={personaCatalog}
       />
+
+      <PersonaSpendCard personaCatalog={personaCatalog} />
+      <StackSpendCard stackCatalog={stackCatalog} />
 
       {selected.size > 0 ? (
         <BulkActionBar
@@ -332,9 +322,9 @@ export function HomePage() {
   );
 }
 
-/** Unified filter widget: search + kind toggle + sort selector. Visually
- * grouped into a single rounded shell so the controls read as one
- * professional toolbar rather than scattered chips. */
+/** THE filter bar — one place, applied to every section below it the
+ * same way. Controls carry visible labels ("show" / "sort") so it's
+ * obvious what each does and what's currently active. */
 function Toolbar({
   search,
   onSearch,
@@ -347,8 +337,8 @@ function Toolbar({
   search: string;
   onSearch: (v: string) => void;
   onSubmit: (e: React.FormEvent) => void;
-  kind: TicketKind;
-  onKindChange: (k: TicketKind) => void;
+  kind: KindFilter;
+  onKindChange: (k: KindFilter) => void;
   sort: SortKey;
   onSortChange: (s: SortKey) => void;
 }) {
@@ -391,9 +381,19 @@ function Toolbar({
           </button>
         ) : null}
       </div>
-      <div className="flex items-center gap-2">
-        <KindToggle value={kind} onChange={onKindChange} />
-        <SortDropdown value={sort} onChange={onSortChange} />
+      <div className="flex items-center gap-3">
+        <label className="flex items-center gap-1.5">
+          <span className="text-[10px] uppercase tracking-[0.14em] text-neutral-600">
+            show
+          </span>
+          <KindToggle value={kind} onChange={onKindChange} />
+        </label>
+        <label className="flex items-center gap-1.5">
+          <span className="text-[10px] uppercase tracking-[0.14em] text-neutral-600">
+            sort
+          </span>
+          <SortDropdown value={sort} onChange={onSortChange} />
+        </label>
       </div>
     </form>
   );
@@ -403,10 +403,10 @@ function KindToggle({
   value,
   onChange,
 }: {
-  value: TicketKind;
-  onChange: (k: TicketKind) => void;
+  value: KindFilter;
+  onChange: (k: KindFilter) => void;
 }) {
-  const kinds: TicketKind[] = ["epic", "feature", "task"];
+  const kinds: KindFilter[] = ["all", "epic", "feature", "task"];
   return (
     <div className="inline-flex rounded-full border border-white/10 bg-white/[0.02] p-0.5">
       {kinds.map((k) => {
@@ -422,7 +422,7 @@ function KindToggle({
                 : "text-neutral-500 hover:text-neutral-200"
             }`}
           >
-            {k === "task" ? "tasks" : `${k}s`}
+            {k === "all" ? "all" : k === "task" ? "tasks" : `${k}s`}
           </button>
         );
       })}

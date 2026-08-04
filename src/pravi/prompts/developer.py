@@ -1,6 +1,7 @@
 """Developer-agent prompts. Versioned — bump VERSION when changing semantics
 so we can correlate Run rows with the prompt that produced them.
 """
+
 from __future__ import annotations
 
 from textwrap import dedent
@@ -13,25 +14,26 @@ from pravi.personas import (
     get_stack,
 )
 
-# Bumped from dev/v2: tasks carrying acceptance criteria also ask the agent
-# to author Playwright specs (ADR 0007). Without criteria the prompt is
-# byte-identical to v2 — guarded by a test.
-VERSION = "dev/v3"
+# v3→v4: dropped the phantom "recommended Claude Skills" sentence — real
+# skills now load via the SDK plugin from the repo's `skills:` list.
+# v2→v3: e2e/Playwright block for tasks carrying acceptance criteria.
+VERSION = "dev/v4"
 
 # The line replaced when the e2e leg is active. Kept as a constant so the
 # swap can't silently no-op if the base prompt is reworded.
-_NO_TESTS_LINE = (
-    "  - Do not run tests yourself — a separate test step will validate your work."
-)
+_NO_TESTS_LINE = "  - Do not run tests yourself — a separate test step will validate your work."
 
 
 def _persona_block(persona_slug: str | None, stack_slug: str | None) -> str:
-    """Return the persona-specific paragraph (if any) + a Claude Skills
-    hint built from the persona's baseline + the stack's additional
-    skills. Empty string when persona is `other`/missing AND no skills
-    are recommended."""
+    """Return the persona-specific paragraph, if any.
+
+    Real skills now load through the SDK plugin (repo `skills:` list in
+    domains.yaml) — the old prompt-level "recommended Claude Skills"
+    sentence named skills that were never actually installed, so it's
+    gone. Persona/stack skill lists in the catalog remain UI metadata.
+    """
     persona = get_persona(persona_slug)
-    stack = get_stack(stack_slug)
+    get_stack(stack_slug)  # validates/normalizes; stack hints are UI-only now
 
     # Coming-soon personas resolve normally but don't get a modifier yet
     # — the catalog left the modifier empty for them. Fall back to the
@@ -39,24 +41,12 @@ def _persona_block(persona_slug: str | None, stack_slug: str | None) -> str:
     if persona.status is PersonaStatus.coming_soon:
         return ""
 
-    skills = list(dict.fromkeys(persona.baseline_skills + stack.additional_skills))
-    parts: list[str] = []
     if persona.system_prompt_modifier:
-        parts.append(f"Persona — {persona.name}:\n{persona.system_prompt_modifier}")
-    if skills:
-        skill_list = ", ".join(f"`{s}`" for s in skills)
-        parts.append(
-            f"Recommended Claude Skills for {persona.name} on the "
-            f"{stack.name} stack: {skill_list}. Lean on the conventions "
-            "those skills carry; if a skill isn't available, fall back "
-            "to the project's existing conventions."
-        )
-    return "\n\n".join(parts)
+        return f"Persona — {persona.name}:\n{persona.system_prompt_modifier}"
+    return ""
 
 
-def _e2e_block(
-    criteria: list[str], *, e2e_dir: str, base_url_env: str
-) -> str:
+def _e2e_block(criteria: list[str], *, e2e_dir: str, base_url_env: str) -> str:
     # Built after dedent, not interpolated into the template: a line at a
     # shallower indent than the rest would reset dedent's common prefix and
     # leave the whole block misindented.

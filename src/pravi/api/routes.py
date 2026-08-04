@@ -1,4 +1,5 @@
 """REST + SSE routes for the plan-review UI."""
+
 from __future__ import annotations
 
 import asyncio
@@ -24,14 +25,13 @@ from temporalio.service import RPCError
 
 from pravi.agents.architects.decompose_parser import parse_decomposition
 from pravi.agents.factory import get_architect
+from pravi.agents.models_config import MODEL_CATALOG
 from pravi.agents.protocols import (
     ClarificationQA,
     ClarifyRequest,
     DomainBrief,
 )
-from pravi.agents.models_config import MODEL_CATALOG
 from pravi.api.schemas import (
-    ModelOptionOut,
     AddDependencyRequest,
     AgentDraftOut,
     BudgetBreakdownOut,
@@ -47,6 +47,7 @@ from pravi.api.schemas import (
     DecomposeDraftRequest,
     DomainOut,
     E2EFailureOut,
+    ModelOptionOut,
     PersistedClarificationOut,
     PersonaOut,
     PersonaSpendOut,
@@ -193,7 +194,6 @@ async def _child_task_status_counts(
 # module-level constants so the derivation logic is unit-testable
 # without hitting the DB.
 _DEV_ACTIVE = ("planning", "plan_approved", "in_progress")
-_DEV_DONE = ("pr_open", "merged")
 
 # How many of a ticket's events to replay when a client (re)connects to the
 # run stream. A repair loop spans several runs, so the replay is scoped to
@@ -264,9 +264,7 @@ async def _parent_external_id(session, parent_id: int | None) -> str | None:
     if parent_id is None:
         return None
     return (
-        await session.execute(
-            select(Ticket.external_id).where(Ticket.id == parent_id)
-        )
+        await session.execute(select(Ticket.external_id).where(Ticket.id == parent_id))
     ).scalar_one_or_none()
 
 
@@ -281,8 +279,7 @@ def _ticket_to_out(
     pr_url: str | None = None
     if ticket.pr_number and repo.github_owner and repo.github_name:
         pr_url = (
-            f"https://github.com/{repo.github_owner}/{repo.github_name}"
-            f"/pull/{ticket.pr_number}"
+            f"https://github.com/{repo.github_owner}/{repo.github_name}/pull/{ticket.pr_number}"
         )
 
     # For non-task tickets, replace the (mostly-inert) raw `status` with
@@ -373,10 +370,7 @@ async def list_tickets(
         # Bulk-fetch descendant task status counts for every non-task row
         # in the result set in ONE pair of queries (see helper). This is
         # what lets features/epics show a derived status without a N+1.
-        non_task_ids = [
-            t.id for (t, _r, _p, _c) in rows
-            if str(t.kind) != TicketKind.task.value
-        ]
+        non_task_ids = [t.id for (t, _r, _p, _c) in rows if str(t.kind) != TicketKind.task.value]
         counts_by_id = await _child_task_status_counts(session, non_task_ids)
 
         return [
@@ -587,9 +581,7 @@ async def _reject_if_ceiling_exceeds_parent(
 
 
 @router.patch("/tickets/{external_id}/budget", response_model=TicketOut)
-async def update_ticket_budget(
-    external_id: str, body: TicketBudgetUpdate
-) -> TicketOut:
+async def update_ticket_budget(external_id: str, body: TicketBudgetUpdate) -> TicketOut:
     """Set or clear the per-ticket cost ceiling. Null = revert to inheritance."""
     if body.cost_ceiling_usd is not None and body.cost_ceiling_usd < 0:
         raise HTTPException(status_code=400, detail="cost_ceiling_usd cannot be negative")
@@ -598,16 +590,12 @@ async def update_ticket_budget(
         fresh = await session.get(Ticket, ticket.id)
         if fresh is None:
             raise HTTPException(status_code=404, detail=f"ticket {external_id!r} not found")
-        await _reject_if_ceiling_exceeds_parent(
-            session, fresh.parent_id, body.cost_ceiling_usd
-        )
+        await _reject_if_ceiling_exceeds_parent(session, fresh.parent_id, body.cost_ceiling_usd)
         fresh.cost_ceiling_usd = body.cost_ceiling_usd
         await session.flush()
         pext = await _parent_external_id(session, fresh.parent_id)
         cc = (
-            await session.execute(
-                select(func.count(Ticket.id)).where(Ticket.parent_id == fresh.id)
-            )
+            await session.execute(select(func.count(Ticket.id)).where(Ticket.parent_id == fresh.id))
         ).scalar_one()
         out_ticket = fresh
         session.expunge(out_ticket)
@@ -650,10 +638,7 @@ async def list_models() -> list[ModelOptionOut]:
     Single source of truth for both the UI options and server-side
     validation. See `pravi.agents.models_config.MODEL_CATALOG`.
     """
-    return [
-        ModelOptionOut(id=o.id, label=o.label, tier=o.tier, hint=o.hint)
-        for o in MODEL_CATALOG
-    ]
+    return [ModelOptionOut(id=o.id, label=o.label, tier=o.tier, hint=o.hint) for o in MODEL_CATALOG]
 
 
 @router.get("/personas", response_model=list[PersonaOut])
@@ -685,9 +670,7 @@ async def spend_by_persona(
     or `all` (default all-time). Optional `repo_id` scopes to one repo.
     """
     async with session_scope() as session:
-        rows = await aggregate_by_persona(
-            session, window=window, repo_id=repo_id
-        )
+        rows = await aggregate_by_persona(session, window=window, repo_id=repo_id)
     return [
         PersonaSpendOut(
             persona=r.persona,
@@ -707,9 +690,7 @@ async def spend_by_stack(
     """Sum of dev-run cost grouped by ticket stack. Same shape as
     `/spend/by-persona`; NULL stack aggregates under `unknown`."""
     async with session_scope() as session:
-        rows = await aggregate_by_stack(
-            session, window=window, repo_id=repo_id
-        )
+        rows = await aggregate_by_stack(session, window=window, repo_id=repo_id)
     return [
         StackSpendOut(
             stack=r.stack,
@@ -773,6 +754,7 @@ async def create_ticket(req: CreateTicketRequest) -> CreateTicketResult:
     # a typo would otherwise only surface at first-run of the affected
     # stage, which is a lot worse UX.
     from pravi.agents.models_config import is_known_model
+
     for stage_attr in ("clarify_model", "decompose_model", "draft_model", "dev_model"):
         val = getattr(req, stage_attr)
         if not is_known_model(val):
@@ -848,9 +830,7 @@ async def create_ticket(req: CreateTicketRequest) -> CreateTicketResult:
                 base_dir=get_settings().clone_base_resolved,
             )
         except Exception as e:
-            raise HTTPException(
-                status_code=502, detail=f"github clone failed: {e}"
-            ) from e
+            raise HTTPException(status_code=502, detail=f"github clone failed: {e}") from e
         repo_path = str(cloned)
         github_meta = (req.github_repo.owner, req.github_repo.name)
 
@@ -890,10 +870,7 @@ async def create_ticket(req: CreateTicketRequest) -> CreateTicketResult:
     if parent_repo is not None and parent_repo.local_path != str(repo_root):
         raise HTTPException(
             status_code=400,
-            detail=(
-                f"repo_path mismatch: parent uses {parent_repo.local_path}, "
-                f"got {repo_root}"
-            ),
+            detail=(f"repo_path mismatch: parent uses {parent_repo.local_path}, got {repo_root}"),
         )
 
     # ----- Resolve domain (inherit from parent if missing) -----
@@ -956,8 +933,7 @@ async def create_ticket(req: CreateTicketRequest) -> CreateTicketResult:
         if req.github_issue is not None:
             gi = req.github_issue
             github_issue_url = (
-                gi.html_url
-                or f"https://github.com/{gi.owner}/{gi.name}/issues/{gi.number}"
+                gi.html_url or f"https://github.com/{gi.owner}/{gi.name}/issues/{gi.number}"
             )
 
         # Persona + stack: explicit request value wins; otherwise inherit
@@ -1130,9 +1106,7 @@ async def draft(external_id: str, req: PlanDraftRequest) -> AgentDraftOut:
     """
     ticket, _repo = await _get_ticket_and_repo(external_id)
     try:
-        draft_id = await draft_service.kickoff_plan_draft(
-            ticket.id, domain_name=req.domain_name
-        )
+        draft_id = await draft_service.kickoff_plan_draft(ticket.id, domain_name=req.domain_name)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
 
@@ -1286,9 +1260,7 @@ async def clarify(external_id: str) -> ClarifyDraftOut:
     return ClarifyDraftOut(
         raw_md=result.raw_md,
         questions=[
-            ClarificationQuestionOut(
-                text=q.text, why=q.why, options=list(q.options or [])
-            )
+            ClarificationQuestionOut(text=q.text, why=q.why, options=list(q.options or []))
             for q in result.questions
         ],
         prompt_version=result.prompt_version,
@@ -1492,9 +1464,7 @@ def _agent_draft_to_out(row: AgentDraft) -> AgentDraftOut:
     )
 
 
-@router.post(
-    "/tickets/{external_id}/decompose/draft", response_model=AgentDraftOut
-)
+@router.post("/tickets/{external_id}/decompose/draft", response_model=AgentDraftOut)
 async def decompose_draft(
     external_id: str, body: DecomposeDraftRequest | None = None
 ) -> AgentDraftOut:
@@ -1515,9 +1485,7 @@ async def decompose_draft(
         for qa in (body.clarifications if body else [])
     ]
     try:
-        draft_id = await draft_service.kickoff_decompose(
-            ticket.id, clarifications=clarifications
-        )
+        draft_id = await draft_service.kickoff_decompose(ticket.id, clarifications=clarifications)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
 
@@ -1540,9 +1508,7 @@ async def get_decompose_draft(external_id: str) -> AgentDraftOut | None:
 
 
 @router.post("/tickets/{external_id}/decompose/approve", response_model=DecomposeApproveOut)
-async def decompose_approve(
-    external_id: str, req: DecomposeApproveRequest
-) -> DecomposeApproveOut:
+async def decompose_approve(external_id: str, req: DecomposeApproveRequest) -> DecomposeApproveOut:
     """Materialize feature + task rows from the user-approved YAML.
 
     Lazy: workflows are NOT started for the new tasks. Each task waits for
@@ -1639,11 +1605,7 @@ async def decompose_approve(
                 prereq_id = title_to_feature_id.get(dep_title)
                 if prereq_id is None or prereq_id == dependent_id:
                     continue
-                session.add(
-                    FeatureDependency(
-                        dependent_id=dependent_id, prerequisite_id=prereq_id
-                    )
-                )
+                session.add(FeatureDependency(dependent_id=dependent_id, prerequisite_id=prereq_id))
 
     log.info(
         "epic.decomposed",
@@ -1674,25 +1636,33 @@ async def _compute_waves(
         emit the structured edges for the UI).
     """
     rows = (
-        await session.execute(
-            select(Ticket).where(
-                Ticket.parent_id == epic_id,
-                Ticket.kind == TicketKind.feature.value,
+        (
+            await session.execute(
+                select(Ticket).where(
+                    Ticket.parent_id == epic_id,
+                    Ticket.kind == TicketKind.feature.value,
+                )
             )
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
     feature_ids = {f.id for f in rows}
     if not feature_ids:
         return [], [], {}
 
     deps = (
-        await session.execute(
-            select(FeatureDependency).where(
-                FeatureDependency.dependent_id.in_(feature_ids),
-                FeatureDependency.prerequisite_id.in_(feature_ids),
+        (
+            await session.execute(
+                select(FeatureDependency).where(
+                    FeatureDependency.dependent_id.in_(feature_ids),
+                    FeatureDependency.prerequisite_id.in_(feature_ids),
+                )
             )
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
 
     prereqs: dict[int, set[int]] = {fid: set() for fid in feature_ids}
     for d in deps:
@@ -1702,9 +1672,7 @@ async def _compute_waves(
     placed: set[int] = set()
     remaining = list(rows)
     while remaining:
-        wave = [
-            f for f in remaining if prereqs[f.id].issubset(placed)
-        ]
+        wave = [f for f in remaining if prereqs[f.id].issubset(placed)]
         if not wave:
             # Cycle — surface remainder so the UI can flag it.
             return waves, remaining, prereqs
@@ -1739,9 +1707,7 @@ async def get_roadmap(external_id: str) -> RoadmapOut:
             dict(
                 (
                     await session.execute(
-                        select(Ticket.id, Ticket.external_id).where(
-                            Ticket.id.in_(all_ids)
-                        )
+                        select(Ticket.id, Ticket.external_id).where(Ticket.id.in_(all_ids))
                     )
                 ).all()
             )
@@ -1795,9 +1761,10 @@ async def add_dependency(external_id: str, req: AddDependencyRequest) -> dict:
     dependent, _ = await _get_ticket_and_repo(external_id)
     prereq, _ = await _get_ticket_and_repo(req.prerequisite_external_id)
 
-    if str(dependent.kind) != TicketKind.feature.value or str(
-        prereq.kind
-    ) != TicketKind.feature.value:
+    if (
+        str(dependent.kind) != TicketKind.feature.value
+        or str(prereq.kind) != TicketKind.feature.value
+    ):
         raise HTTPException(
             status_code=400,
             detail="both endpoints must be features",
@@ -1831,18 +1798,22 @@ async def add_dependency(external_id: str, req: AddDependencyRequest) -> dict:
         # extend prereqs, recompute waves, see if any feature is unplaced.
         waves, cyclic, _ = await _compute_waves(session, dependent.parent_id)
         # Simulate the new edge in memory.
-        prereqs_now: dict[int, set[int]] = {
-            f.id: set() for w in waves for f in w
-        } | {f.id: set() for f in cyclic}
+        prereqs_now: dict[int, set[int]] = {f.id: set() for w in waves for f in w} | {
+            f.id: set() for f in cyclic
+        }
         # Re-derive from DB (cheap; <=N rows).
         existing = (
-            await session.execute(
-                select(FeatureDependency).where(
-                    FeatureDependency.dependent_id.in_(prereqs_now.keys()),
-                    FeatureDependency.prerequisite_id.in_(prereqs_now.keys()),
+            (
+                await session.execute(
+                    select(FeatureDependency).where(
+                        FeatureDependency.dependent_id.in_(prereqs_now.keys()),
+                        FeatureDependency.prerequisite_id.in_(prereqs_now.keys()),
+                    )
                 )
             )
-        ).scalars().all()
+            .scalars()
+            .all()
+        )
         for d in existing:
             prereqs_now.setdefault(d.dependent_id, set()).add(d.prerequisite_id)
         prereqs_now.setdefault(dependent.id, set()).add(prereq.id)
@@ -1850,9 +1821,7 @@ async def add_dependency(external_id: str, req: AddDependencyRequest) -> dict:
         placed: set[int] = set()
         remaining = set(prereqs_now)
         while remaining:
-            next_set = {
-                fid for fid in remaining if prereqs_now[fid].issubset(placed)
-            }
+            next_set = {fid for fid in remaining if prereqs_now[fid].issubset(placed)}
             if not next_set:
                 raise HTTPException(
                     status_code=400, detail="adding this dependency would create a cycle"
@@ -1860,17 +1829,13 @@ async def add_dependency(external_id: str, req: AddDependencyRequest) -> dict:
             placed |= next_set
             remaining -= next_set
 
-        row = FeatureDependency(
-            dependent_id=dependent.id, prerequisite_id=prereq.id
-        )
+        row = FeatureDependency(dependent_id=dependent.id, prerequisite_id=prereq.id)
         session.add(row)
         await session.flush()
         return {"id": row.id, "created": True}
 
 
-@router.delete(
-    "/tickets/{external_id}/dependencies/{prereq_external_id}", status_code=204
-)
+@router.delete("/tickets/{external_id}/dependencies/{prereq_external_id}", status_code=204)
 async def delete_dependency(external_id: str, prereq_external_id: str) -> None:
     """Remove the edge `external_id` → `prereq_external_id`."""
     dependent, _ = await _get_ticket_and_repo(external_id)
@@ -1895,14 +1860,15 @@ class _EligibilityReport:
     ineligible: list[tuple[Ticket, str]]
 
 
-# Statuses where a task is "done" from the dev agent's perspective — used
-# to gate dependent features.
-_TASK_DONE = {"pr_open", "merged"}
+# Statuses where a task is truly done — used to gate dependent features.
+# An open PR is NOT done: the work isn't on the base branch yet, so a
+# dependent feature building on top of it would target code that may
+# still change (or never land). Merge is the gate; the workflow's
+# wait-for-merge loop flips pr_open → merged automatically.
+_TASK_DONE = {"merged"}
 
 
-async def _resolve_eligible_tasks(
-    session: AsyncSession, parent: Ticket
-) -> _EligibilityReport:
+async def _resolve_eligible_tasks(session: AsyncSession, parent: Ticket) -> _EligibilityReport:
     """Which task tickets under `parent` are ready to start?
 
     Rules:
@@ -1918,12 +1884,16 @@ async def _resolve_eligible_tasks(
     """
     if str(parent.kind) == TicketKind.feature.value:
         rows = (
-            await session.execute(
-                select(Ticket)
-                .where(Ticket.parent_id == parent.id)
-                .where(Ticket.kind == TicketKind.task.value)
+            (
+                await session.execute(
+                    select(Ticket)
+                    .where(Ticket.parent_id == parent.id)
+                    .where(Ticket.kind == TicketKind.task.value)
+                )
             )
-        ).scalars().all()
+            .scalars()
+            .all()
+        )
         eligible: list[Ticket] = []
         ineligible: list[tuple[Ticket, str]] = []
         for t in rows:
@@ -1938,12 +1908,16 @@ async def _resolve_eligible_tasks(
 
     # Epic. Walk features → their tasks; compute readiness via deps.
     features = (
-        await session.execute(
-            select(Ticket)
-            .where(Ticket.parent_id == parent.id)
-            .where(Ticket.kind == TicketKind.feature.value)
+        (
+            await session.execute(
+                select(Ticket)
+                .where(Ticket.parent_id == parent.id)
+                .where(Ticket.kind == TicketKind.feature.value)
+            )
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
     feature_ids = [f.id for f in features]
     if not feature_ids:
         return _EligibilityReport(eligible=[], ineligible=[])
@@ -1951,8 +1925,9 @@ async def _resolve_eligible_tasks(
     # Dependency edges. dependent_id depends on prerequisite_id.
     edges = (
         await session.execute(
-            select(FeatureDependency.dependent_id, FeatureDependency.prerequisite_id)
-            .where(FeatureDependency.dependent_id.in_(feature_ids))
+            select(FeatureDependency.dependent_id, FeatureDependency.prerequisite_id).where(
+                FeatureDependency.dependent_id.in_(feature_ids)
+            )
         )
     ).all()
     prereqs_of: dict[int, set[int]] = {fid: set() for fid in feature_ids}
@@ -1961,12 +1936,16 @@ async def _resolve_eligible_tasks(
 
     # All tasks under any feature in this epic.
     tasks = (
-        await session.execute(
-            select(Ticket)
-            .where(Ticket.parent_id.in_(feature_ids))
-            .where(Ticket.kind == TicketKind.task.value)
+        (
+            await session.execute(
+                select(Ticket)
+                .where(Ticket.parent_id.in_(feature_ids))
+                .where(Ticket.kind == TicketKind.task.value)
+            )
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
 
     # Group tasks by feature so we can compute "feature is done".
     tasks_by_feature: dict[int, list[Ticket]] = {fid: [] for fid in feature_ids}
@@ -1987,9 +1966,7 @@ async def _resolve_eligible_tasks(
     eligible = []
     ineligible = []
     for f in features:
-        unmet = [
-            pid for pid in prereqs_of.get(f.id, set()) if not feature_is_done(pid)
-        ]
+        unmet = [pid for pid in prereqs_of.get(f.id, set()) if not feature_is_done(pid)]
         feature_ready = not unmet
         for t in tasks_by_feature.get(f.id, []):
             if str(t.status) != "pending":
@@ -1998,18 +1975,12 @@ async def _resolve_eligible_tasks(
             if feature_ready:
                 eligible.append(t)
             else:
-                blockers = ", ".join(
-                    fid_to_title.get(pid, f"#{pid}") for pid in unmet
-                ) or "unknown"
-                ineligible.append(
-                    (t, f"feature {f.title!r} waiting on: {blockers}")
-                )
+                blockers = ", ".join(fid_to_title.get(pid, f"#{pid}") for pid in unmet) or "unknown"
+                ineligible.append((t, f"feature {f.title!r} waiting on: {blockers}"))
     return _EligibilityReport(eligible=eligible, ineligible=ineligible)
 
 
-@router.post(
-    "/tickets/{external_id}/start-children", response_model=StartChildrenResult
-)
+@router.post("/tickets/{external_id}/start-children", response_model=StartChildrenResult)
 async def start_children(
     external_id: str,
     base_ref: str = "main",
@@ -2048,13 +2019,9 @@ async def start_children(
         report = await _resolve_eligible_tasks(session, parent_row)
         # Capture task fields we'll need outside the session (the rows are
         # detached the moment the session closes).
-        eligible_snap = [
-            (t.id, t.external_id, t.title, t.domain_name) for t in report.eligible
-        ]
+        eligible_snap = [(t.id, t.external_id, t.title, t.domain_name) for t in report.eligible]
         skipped_snap = [
-            StartChildrenSkipped(
-                external_id=t.external_id, title=t.title, reason=reason
-            )
+            StartChildrenSkipped(external_id=t.external_id, title=t.title, reason=reason)
             for t, reason in report.ineligible
         ]
 
@@ -2158,9 +2125,7 @@ async def start_children(
 
 
 @router.post("/tickets/{external_id}/start-workflow", response_model=CreateTicketResult)
-async def start_workflow(
-    external_id: str, base_ref: str = "main"
-) -> CreateTicketResult:
+async def start_workflow(external_id: str, base_ref: str = "main") -> CreateTicketResult:
     """Launch a FeatureWorkflow for an existing task ticket.
 
     Used by tasks materialized through epic decomposition — they exist in
@@ -2234,16 +2199,14 @@ async def start_workflow(
     )
 
 
-async def _resolve_roots(
-    session, external_ids: list[str]
-) -> tuple[list[Ticket], list[str]]:
+async def _resolve_roots(session, external_ids: list[str]) -> tuple[list[Ticket], list[str]]:
     """Resolve `external_ids` to Ticket rows and prune descendants of other
     selected roots. Returns (root_tickets, not_found_external_ids)."""
     rows = (
-        await session.execute(
-            select(Ticket).where(Ticket.external_id.in_(external_ids))
-        )
-    ).scalars().all()
+        (await session.execute(select(Ticket).where(Ticket.external_id.in_(external_ids))))
+        .scalars()
+        .all()
+    )
     found_ext_ids = {r.external_id for r in rows}
     not_found = [ext for ext in external_ids if ext not in found_ext_ids]
 
@@ -2268,10 +2231,10 @@ async def _collect_subtree_ids(session, root_ids: list[int]) -> set[int]:
     frontier = list(root_ids)
     while frontier:
         child_ids = (
-            await session.execute(
-                select(Ticket.id).where(Ticket.parent_id.in_(frontier))
-            )
-        ).scalars().all()
+            (await session.execute(select(Ticket.id).where(Ticket.parent_id.in_(frontier))))
+            .scalars()
+            .all()
+        )
         new = [c for c in child_ids if c not in all_ids]
         all_ids.update(new)
         frontier = new
@@ -2301,9 +2264,7 @@ async def _terminate_workflows(workflow_ids: list[str], reason: str) -> int:
     return terminated
 
 
-async def _hard_delete_subtree(
-    external_ids: list[str], *, reason: str
-) -> BulkDeleteResult:
+async def _hard_delete_subtree(external_ids: list[str], *, reason: str) -> BulkDeleteResult:
     """Shared helper for single + bulk delete.
 
     Steps: resolve roots → collect subtree IDs → terminate workflows →
@@ -2322,13 +2283,17 @@ async def _hard_delete_subtree(
         root_ext_ids = [r.external_id for r in roots]
         all_ids = await _collect_subtree_ids(session, root_ids)
         wf_ids = (
-            await session.execute(
-                select(Ticket.workflow_id).where(
-                    Ticket.id.in_(all_ids),
-                    Ticket.workflow_id.is_not(None),
+            (
+                await session.execute(
+                    select(Ticket.workflow_id).where(
+                        Ticket.id.in_(all_ids),
+                        Ticket.workflow_id.is_not(None),
+                    )
                 )
             )
-        ).scalars().all()
+            .scalars()
+            .all()
+        )
 
     # Terminate workflows OUTSIDE the DB transaction so a Temporal hiccup
     # doesn't leave the DB in a half-deleted state.
@@ -2338,9 +2303,7 @@ async def _hard_delete_subtree(
         await session.execute(sa_delete(Event).where(Event.ticket_id.in_(all_ids)))
         await session.execute(sa_delete(Run).where(Run.ticket_id.in_(all_ids)))
         await session.execute(sa_delete(Plan).where(Plan.ticket_id.in_(all_ids)))
-        await session.execute(
-            sa_delete(Clarification).where(Clarification.ticket_id.in_(all_ids))
-        )
+        await session.execute(sa_delete(Clarification).where(Clarification.ticket_id.in_(all_ids)))
         # FeatureDependency cascades via FK; tickets last.
         await session.execute(sa_delete(Ticket).where(Ticket.id.in_(all_ids)))
 
@@ -2361,9 +2324,7 @@ async def _hard_delete_subtree(
 @router.delete("/tickets/{external_id}", status_code=200)
 async def delete_ticket(external_id: str) -> dict:
     """Delete a ticket plus its full descendant subtree. Hard-delete."""
-    result = await _hard_delete_subtree(
-        [external_id], reason=f"ticket {external_id} deleted"
-    )
+    result = await _hard_delete_subtree([external_id], reason=f"ticket {external_id} deleted")
     return {
         "deleted_ticket_count": result.deleted_ticket_count,
         "workflows_terminated": result.workflows_terminated,
@@ -2381,9 +2342,7 @@ async def bulk_delete_tickets(req: BulkDeleteRequest) -> BulkDeleteResult:
     """
     if not req.external_ids:
         raise HTTPException(status_code=400, detail="external_ids is empty")
-    return await _hard_delete_subtree(
-        req.external_ids, reason="bulk-deleted from UI"
-    )
+    return await _hard_delete_subtree(req.external_ids, reason="bulk-deleted from UI")
 
 
 @router.post("/tickets/{external_id}/cancel")
@@ -2582,8 +2541,9 @@ async def run_subtree_stream(external_id: str, replay: int = 50):
         if task_ids:
             tag_rows = (
                 await session.execute(
-                    select(Ticket.id, Ticket.external_id, Ticket.title)
-                    .where(Ticket.id.in_(task_ids))
+                    select(Ticket.id, Ticket.external_id, Ticket.title).where(
+                        Ticket.id.in_(task_ids)
+                    )
                 )
             ).all()
             tag_by_id: dict[int, tuple[str, str]] = {

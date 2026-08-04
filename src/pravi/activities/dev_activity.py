@@ -14,6 +14,7 @@ If the workflow passes `ticket_id`, this activity also:
     telemetry. Standalone (CLI-only) callers can pass `ticket_id=None`
     and event emission is skipped.
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field, replace
@@ -103,6 +104,18 @@ class DevActivityResult:
     errors: list[str] = field(default_factory=list)
 
 
+def _repo_skills(cwd: str) -> list[str]:
+    """Skills the worktree's own `.builder/domains.yaml` grants this run.
+
+    Best-effort by design: a missing/invalid manifest (CLI runs with
+    --domains-file, pre-skills repos) means no skills, never a failed run.
+    """
+    try:
+        return list(DomainRegistry.load(Path(cwd)).file.skills)
+    except Exception:
+        return []
+
+
 def _build_request(req: DevActivityRequest) -> DevRunRequest:
     settings = get_settings()
     sp = build_system_prompt(
@@ -127,6 +140,7 @@ def _build_request(req: DevActivityRequest) -> DevRunRequest:
         # Explicit override wins; None lets ClaudeDevAgent fall back to
         # whatever the factory built it with (settings.dev_model).
         model=req.model,
+        skills=_repo_skills(req.cwd),
     )
 
 
@@ -208,8 +222,7 @@ def _classify_failure(
     if stop_reason == "max_turns" or "max_turns" in err_blob:
         return (
             "max_turns_exhausted",
-            "Hit the max-turns iteration cap. The task may need to be "
-            "broken into smaller pieces.",
+            "Hit the max-turns iteration cap. The task may need to be broken into smaller pieces.",
         )
 
     if errors:
@@ -327,6 +340,7 @@ async def run_dev(req: DevActivityRequest) -> DevActivityResult:
     if req.model is None and req.ticket_id is not None:
         from pravi.agents.models_config import resolve_stage_model
         from pravi.db.models import Ticket
+
         async with session_scope() as session:
             ticket_row = await session.get(Ticket, req.ticket_id)
             if ticket_row is not None:
@@ -430,9 +444,7 @@ async def run_dev(req: DevActivityRequest) -> DevActivityResult:
         if classified:
             event_message = f"dev agent failed: {classified[1]}"
         else:
-            event_message = (
-                f"dev agent finished: success=True, turns={result.num_turns}"
-            )
+            event_message = f"dev agent finished: success=True, turns={result.num_turns}"
         async with session_scope() as session:
             await emit_event(
                 session,
@@ -457,9 +469,7 @@ async def run_dev(req: DevActivityRequest) -> DevActivityResult:
                 },
             )
 
-    summary = result.result_text or (
-        "; ".join(result.errors) if result.errors else "no output"
-    )
+    summary = result.result_text or ("; ".join(result.errors) if result.errors else "no output")
     return DevActivityResult(
         success=result.success,
         summary=summary[:2000],

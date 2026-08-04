@@ -1,0 +1,4 @@
+{
+  "name": "pravi",
+  "description": "Preset deployment/platform skills pravi grants to dev agents per repo (.builder/domains.yaml `skills:` list)."
+}

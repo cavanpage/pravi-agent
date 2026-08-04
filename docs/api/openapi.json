@@ -634,6 +634,17 @@
             "title": "Body",
             "type": "string"
           },
+          "clarify_model": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Clarify Model"
+          },
           "cleanup_worktree": {
             "default": false,
             "title": "Cleanup Worktree",
@@ -650,6 +661,28 @@
             ],
             "title": "Cost Ceiling Usd"
           },
+          "decompose_model": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Decompose Model"
+          },
+          "dev_model": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Dev Model"
+          },
           "domain_name": {
             "anyOf": [
               {
@@ -660,6 +693,17 @@
               }
             ],
             "title": "Domain Name"
+          },
+          "draft_model": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Draft Model"
           },
           "external_id": {
             "anyOf": [
@@ -1331,6 +1375,35 @@
           }
         },
         "title": "HTTPValidationError",
+        "type": "object"
+      },
+      "ModelOptionOut": {
+        "description": "One entry the /api/models endpoint returns; hydrates the ticket-\nform dropdown. See `pravi.agents.models_config.MODEL_CATALOG`.",
+        "properties": {
+          "hint": {
+            "title": "Hint",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "tier": {
+            "title": "Tier",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "label",
+          "tier",
+          "hint"
+        ],
+        "title": "ModelOptionOut",
         "type": "object"
       },
       "PagesProjectOut": {
@@ -2245,6 +2318,17 @@
             "title": "Child Status Counts",
             "type": "object"
           },
+          "clarify_model": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Clarify Model"
+          },
           "cost_ceiling_usd": {
             "anyOf": [
               {
@@ -2261,6 +2345,28 @@
             "title": "Created At",
             "type": "string"
           },
+          "decompose_model": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Decompose Model"
+          },
+          "dev_model": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Dev Model"
+          },
           "domain_name": {
             "anyOf": [
               {
@@ -2271,6 +2377,17 @@
               }
             ],
             "title": "Domain Name"
+          },
+          "draft_model": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Draft Model"
           },
           "e2e_verdict": {
             "anyOf": [
@@ -2838,6 +2955,29 @@
           }
         },
         "summary": "List Templates"
+      }
+    },
+    "/api/models": {
+      "get": {
+        "description": "Curated Claude model catalog for the ticket-form dropdown.\n\nSingle source of truth for both the UI options and server-side\nvalidation. See `pravi.agents.models_config.MODEL_CATALOG`.",
+        "operationId": "list_models_api_models_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/ModelOptionOut"
+                  },
+                  "title": "Response List Models Api Models Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "List Models"
       }
     },
     "/api/personas": {

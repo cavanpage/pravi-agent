@@ -11,6 +11,7 @@ If the dev agent didn't commit anything we short-circuit and don't push
 missing we log and skip — the dev step still counts as successful so the
 user can connect GitHub later and re-push manually.
 """
+
 from __future__ import annotations
 
 import re
@@ -192,8 +193,7 @@ async def _resolve_and_push(
             owner=owner,
             repo=repo_name,
             skipped_reason=(
-                "no GitHub connection. Click 'Connect GitHub' in the web UI, "
-                "then re-run this task."
+                "no GitHub connection. Click 'Connect GitHub' in the web UI, then re-run this task."
             ),
         )
 
@@ -263,15 +263,11 @@ async def open_pr(req: OpenPRRequest) -> OpenPRResult:
     if existing is not None:
         pr_number = int(existing["number"])
         pr_url = existing.get("html_url") or _pr_url(req.owner, req.repo, pr_number)
-        await _persist_pr(
-            req.ticket_id, pr_number=pr_number, owner=req.owner, repo=req.repo
-        )
+        await _persist_pr(req.ticket_id, pr_number=pr_number, owner=req.owner, repo=req.repo)
         log.info("pr.reused", pr_number=pr_number, url=pr_url)
         return OpenPRResult(pr_number=pr_number, pr_url=pr_url, already_open=True)
 
-    draft = (
-        get_settings().pr_open_as_draft if req.draft is None else req.draft
-    )
+    draft = get_settings().pr_open_as_draft if req.draft is None else req.draft
     try:
         pr = await gh.create_pull_request(
             conn.access_token,
@@ -376,3 +372,44 @@ async def push_and_open_pr(req: PushAndOpenPRRequest) -> PushAndOpenPRResult:
         pr_url=pr_url,
         commits_pushed=n_commits,
     )
+
+
+@dataclass
+class CheckPRStateRequest:
+    owner: str
+    repo: str
+    pr_number: int
+
+
+@dataclass
+class CheckPRStateResult:
+    # "merged" | "closed" | "open" | "unknown" (no connection / API error —
+    # the poll loop treats unknown as "still open" and tries again later).
+    state: str
+    error: str | None = None
+
+
+@activity.defn
+async def check_pr_state(req: CheckPRStateRequest) -> CheckPRStateResult:
+    """Poll one PR's merge state. Cheap (single GET) — runs on the
+    features queue from the workflow's wait-for-merge loop."""
+    conn = await gh.get_active_connection()
+    if conn is None:
+        return CheckPRStateResult(state="unknown", error="no GitHub connection")
+    try:
+        state = await gh.get_pull_request_state(
+            conn.access_token,
+            owner=req.owner,
+            repo=req.repo,
+            number=req.pr_number,
+        )
+    except Exception as e:
+        log.warning(
+            "pr.check_state_failed",
+            owner=req.owner,
+            repo=req.repo,
+            pr=req.pr_number,
+            error=str(e),
+        )
+        return CheckPRStateResult(state="unknown", error=str(e)[:200])
+    return CheckPRStateResult(state=state)

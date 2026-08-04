@@ -7,6 +7,7 @@ session; whoever opens the browser gets to act as that account.
 OAuth state is held in-memory (process-local). That's fine for one
 uvicorn process; on restart the user just re-clicks "Connect GitHub".
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -245,9 +246,7 @@ async def create_repo(
         # Re-shape the error so the API can return a useful 409.
         raise RuntimeError(f"github create_repo conflict: {r.text[:300]}")
     if r.status_code >= 400:
-        raise RuntimeError(
-            f"github create_repo {r.status_code}: {r.text[:300]}"
-        )
+        raise RuntimeError(f"github create_repo {r.status_code}: {r.text[:300]}")
     return r.json()
 
 
@@ -292,9 +291,7 @@ async def push_initial_commit(
             if proc.returncode != 0:
                 # Scrub token before raising.
                 msg = err.decode(errors="replace").replace(access_token, "<redacted>")
-                raise RuntimeError(
-                    f"{' '.join(args[:2])} failed ({proc.returncode}): {msg[:300]}"
-                )
+                raise RuntimeError(f"{' '.join(args[:2])} failed ({proc.returncode}): {msg[:300]}")
 
         # Branch name on `git init` defaults to whatever the user's
         # gitconfig says (usually `main`). Force it explicitly so we
@@ -304,14 +301,15 @@ async def push_initial_commit(
         await _run("git", "config", "user.name", author_name)
         await _run("git", "add", ".")
         await _run("git", "commit", "-q", "-m", commit_message)
-        token_url = (
-            f"https://x-access-token:{access_token}@github.com/{owner}/{name}.git"
-        )
+        token_url = f"https://x-access-token:{access_token}@github.com/{owner}/{name}.git"
         await _run("git", "remote", "add", "origin", token_url)
         await _run("git", "push", "-q", "-u", "origin", default_branch)
         log.info(
-            "github.initial_commit_pushed", owner=owner, name=name,
-            branch=default_branch, file_count=len(files),
+            "github.initial_commit_pushed",
+            owner=owner,
+            name=name,
+            branch=default_branch,
+            file_count=len(files),
         )
     finally:
         _shutil.rmtree(workdir, ignore_errors=True)
@@ -404,9 +402,7 @@ async def ensure_repo_cloned(
     if (target / ".git").is_dir():
         return target
 
-    token_url = clone_url.replace(
-        "https://", f"https://x-access-token:{access_token}@", 1
-    )
+    token_url = clone_url.replace("https://", f"https://x-access-token:{access_token}@", 1)
     log.info("github.clone.start", owner=owner, name=name, target=str(target))
     proc = await asyncio.create_subprocess_exec(
         "git",
@@ -515,9 +511,7 @@ async def comment_on_issue(
             json={"body": body},
         )
     if r.status_code >= 400:
-        raise RuntimeError(
-            f"github comment {r.status_code}: {r.text[:300]}"
-        )
+        raise RuntimeError(f"github comment {r.status_code}: {r.text[:300]}")
     return r.json()
 
 
@@ -545,9 +539,7 @@ async def add_labels_to_issue(
             json={"labels": labels},
         )
     if r.status_code >= 400:
-        raise RuntimeError(
-            f"github label {r.status_code}: {r.text[:300]}"
-        )
+        raise RuntimeError(f"github label {r.status_code}: {r.text[:300]}")
 
 
 async def find_open_pull_request(
@@ -622,7 +614,38 @@ async def create_pull_request(
             json=payload,
         )
     if r.status_code >= 400:
-        raise RuntimeError(
-            f"github PR create {r.status_code}: {r.text[:500]}"
-        )
+        raise RuntimeError(f"github PR create {r.status_code}: {r.text[:500]}")
     return r.json()
+
+
+async def get_pull_request_state(
+    access_token: str,
+    *,
+    owner: str,
+    repo: str,
+    number: int,
+) -> str:
+    """Return "merged" | "closed" | "open" for a PR.
+
+    GitHub's `state` field is only open/closed; merged is closed +
+    `merged_at` set, so we normalize the three-way answer callers
+    (the workflow's wait-for-merge loop) actually need.
+    """
+    url = f"https://api.github.com/repos/{owner}/{repo}/pulls/{number}"
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        r = await client.get(
+            url,
+            headers={
+                "Authorization": f"Bearer {access_token}",
+                "Accept": "application/vnd.github+json",
+                "X-GitHub-Api-Version": "2022-11-28",
+            },
+        )
+    if r.status_code >= 400:
+        raise RuntimeError(f"github PR get {r.status_code}: {r.text[:300]}")
+    data = r.json()
+    if data.get("merged_at"):
+        return "merged"
+    if data.get("state") == "closed":
+        return "closed"
+    return "open"

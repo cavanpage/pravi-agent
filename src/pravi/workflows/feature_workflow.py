@@ -12,6 +12,7 @@ Lifecycle (Slice 1B today; tester/reviewer/PR steps land in 1C/Slice 2):
 Status is exposed via `@workflow.query current_status()` so the CLI can
 introspect from the outside.
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -44,10 +45,13 @@ with workflow.unsafe.imports_passed_through():
         run_e2e,
     )
     from pravi.activities.pr_activity import (
+        CheckPRStateRequest,
+        CheckPRStateResult,
         OpenPRRequest,
         OpenPRResult,
         PushBranchRequest,
         PushBranchResult,
+        check_pr_state,
         open_pr,
         push_branch,
     )
@@ -87,6 +91,7 @@ STATUS_PUSHING = "pushing"
 STATUS_AWAITING_PREVIEW = "awaiting_preview"
 STATUS_RUNNING_E2E = "running_e2e"
 STATUS_REPAIRING = "repairing"
+STATUS_AWAITING_MERGE = "awaiting_merge"
 STATUS_DONE = "done"
 STATUS_CANCELLED = "cancelled"
 
@@ -239,9 +244,7 @@ class FeatureWorkflow:
 
         await workflow.execute_activity(
             update_ticket_status,
-            TicketStatusUpdate(
-                ticket_id=ticket.ticket_id, status="plan_approved"
-            ),
+            TicketStatusUpdate(ticket_id=ticket.ticket_id, status="plan_approved"),
             start_to_close_timeout=timedelta(seconds=30),
             retry_policy=RetryPolicy(maximum_attempts=3),
         )
@@ -310,9 +313,7 @@ class FeatureWorkflow:
                 dev_result=dev_result,
                 pr_result=None,
                 final_status="failed",
-                verdict=(
-                    VERDICT_NOT_RUN if e2e_active else VERDICT_SKIPPED_NO_CRITERIA
-                ),
+                verdict=(VERDICT_NOT_RUN if e2e_active else VERDICT_SKIPPED_NO_CRITERIA),
             )
 
         # --- push → deploy → verify → repair ----------------------------
@@ -325,6 +326,8 @@ class FeatureWorkflow:
 
         give_up_reason: str | None = None
         pr_result: OpenPRResult | None = None
+        pr_owner: str | None = None
+        pr_repo: str | None = None
         e2e_result: RunE2EResult | None = None
         deployment: PreviewDeployment | None = None
         preview_url: str | None = None
@@ -353,6 +356,7 @@ class FeatureWorkflow:
             # leaves a reviewable diff with the preview URL on it, rather
             # than today's bare `in_progress`. Draft while e2e is unproven.
             if pr_result is None and push.owner and push.repo:
+                pr_owner, pr_repo = push.owner, push.repo
                 pr_result = await workflow.execute_activity(
                     open_pr,
                     OpenPRRequest(
@@ -362,9 +366,7 @@ class FeatureWorkflow:
                         repo=push.repo,
                         head_branch=handle.branch,
                         base_ref=inp.base_ref,
-                        pr_body=_build_pr_body(
-                            ticket=ticket, plan=plan, criteria=criteria
-                        ),
+                        pr_body=_build_pr_body(ticket=ticket, plan=plan, criteria=criteria),
                         draft=True if e2e_active else None,
                     ),
                     start_to_close_timeout=timedelta(minutes=2),
@@ -459,10 +461,7 @@ class FeatureWorkflow:
                 )
 
             if attempt >= inp.max_e2e_attempts:
-                give_up_reason = (
-                    f"exhausted {inp.max_e2e_attempts} attempt(s) without a "
-                    "green run"
-                )
+                give_up_reason = f"exhausted {inp.max_e2e_attempts} attempt(s) without a green run"
                 break
 
             attempt += 1
@@ -509,7 +508,7 @@ class FeatureWorkflow:
         else:
             final_status = "in_progress"
 
-        return await self._finish(
+        result = await self._finish(
             ticket=ticket,
             plan=plan,
             handle=handle,
@@ -525,6 +524,25 @@ class FeatureWorkflow:
             give_up_reason=give_up_reason,
         )
 
+        # A ticket isn't done when the PR opens — it's done when the PR
+        # merges. Keep the workflow alive (durable timers, cheap polls)
+        # until the human merges or closes it, then flip the status.
+        if (
+            final_status == "pr_open"
+            and pr_result is not None
+            and pr_result.pr_number is not None
+            and pr_owner
+            and pr_repo
+        ):
+            await self._await_merge(
+                ticket_id=ticket.ticket_id,
+                owner=pr_owner,
+                repo=pr_repo,
+                pr_number=pr_result.pr_number,
+            )
+
+        return result
+
     # ---- helpers -------------------------------------------------------
 
     async def _emit(
@@ -533,11 +551,65 @@ class FeatureWorkflow:
         """Fire-and-forget telemetry. Never fail a ticket over a log line."""
         await workflow.execute_activity(
             emit_ticket_event,
-            EmitEventRequest(
-                ticket_id=ticket_id, kind=kind, message=message, payload=payload
-            ),
+            EmitEventRequest(ticket_id=ticket_id, kind=kind, message=message, payload=payload),
             start_to_close_timeout=timedelta(seconds=30),
             retry_policy=RetryPolicy(maximum_attempts=2),
+        )
+
+    async def _await_merge(self, *, ticket_id: int, owner: str, repo: str, pr_number: int) -> None:
+        """Durable wait for the human review gate: the ticket closes when
+        the PR merges, not when it opens.
+
+        Polls GitHub via `check_pr_state` with a backing-off Temporal
+        timer (pure counter — replay-safe). On merge → status `merged`;
+        on close-without-merge → `cancelled`. After ~7 days of polling we
+        stop and leave the ticket at `pr_open` — a stale PR shouldn't
+        keep a workflow alive forever, and the status can still be fixed
+        by re-running or manually.
+        """
+        self._status = STATUS_AWAITING_MERGE
+        for poll in range(_MERGE_MAX_POLLS):
+            await workflow.sleep(_merge_poll_backoff(poll))
+            state: CheckPRStateResult = await workflow.execute_activity(
+                check_pr_state,
+                CheckPRStateRequest(owner=owner, repo=repo, pr_number=pr_number),
+                start_to_close_timeout=timedelta(seconds=30),
+                retry_policy=RetryPolicy(maximum_attempts=2),
+            )
+            if state.state == "merged":
+                await workflow.execute_activity(
+                    update_ticket_status,
+                    TicketStatusUpdate(ticket_id=ticket_id, status="merged"),
+                    start_to_close_timeout=timedelta(seconds=30),
+                    retry_policy=RetryPolicy(maximum_attempts=3),
+                )
+                await self._emit(
+                    ticket_id,
+                    "pr_merged",
+                    f"PR #{pr_number} merged — ticket closed",
+                    {"pr_number": pr_number, "owner": owner, "repo": repo},
+                )
+                return
+            if state.state == "closed":
+                await workflow.execute_activity(
+                    update_ticket_status,
+                    TicketStatusUpdate(ticket_id=ticket_id, status="cancelled"),
+                    start_to_close_timeout=timedelta(seconds=30),
+                    retry_policy=RetryPolicy(maximum_attempts=3),
+                )
+                await self._emit(
+                    ticket_id,
+                    "pr_closed",
+                    f"PR #{pr_number} closed without merging — ticket cancelled",
+                    {"pr_number": pr_number, "owner": owner, "repo": repo},
+                )
+                return
+            # "open" and "unknown" both mean keep waiting.
+        await self._emit(
+            ticket_id,
+            "merge_watch_expired",
+            f"stopped watching PR #{pr_number} after ~7 days; still open",
+            {"pr_number": pr_number},
         )
 
     async def _run_dev(
@@ -617,13 +689,9 @@ class FeatureWorkflow:
         while workflow.now() < deadline:
             last = await workflow.execute_activity(
                 poll_preview_deployment,
-                PollPreviewRequest(
-                    project=project, commit_sha=commit_sha, branch=branch
-                ),
+                PollPreviewRequest(project=project, commit_sha=commit_sha, branch=branch),
                 start_to_close_timeout=timedelta(seconds=30),
-                retry_policy=RetryPolicy(
-                    maximum_attempts=3, initial_interval=timedelta(seconds=2)
-                ),
+                retry_policy=RetryPolicy(maximum_attempts=3, initial_interval=timedelta(seconds=2)),
             )
             if last.terminal:
                 if last.succeeded:
@@ -763,6 +831,22 @@ E2E_WRITE_PATHS = ("e2e/**", "playwright.config.ts")
 MAX_QUOTED_FAILURES = 4
 
 
+# Wait-for-merge pacing: 1-minute polls for the first 15 minutes (fresh
+# PRs get reviewed fast in a demo loop), 5-minute polls for the rest of
+# the first ~5 hours, then 15-minute polls. 720 polls ≈ 7 days total.
+_MERGE_MAX_POLLS = 720
+
+
+def _merge_poll_backoff(polls: int) -> int:
+    """Seconds before merge-poll N+1. Pure function of the counter —
+    no clock, no randomness — so workflow replay is exact."""
+    if polls < 15:
+        return 60
+    if polls < 72:
+        return 300
+    return 900
+
+
 def _poll_backoff(polls: int) -> int:
     """Seconds to wait before poll N+1.
 
@@ -825,9 +909,7 @@ def _build_e2e_failure_feedback(
         )
     else:
         quoted = result.failures[:MAX_QUOTED_FAILURES]
-        blocks: list[str] = [
-            f"\n## Failing tests ({result.failed_count} of {result.total})\n"
-        ]
+        blocks: list[str] = [f"\n## Failing tests ({result.failed_count} of {result.total})\n"]
         for f in quoted:
             loc = f"{f.file}:{f.line}" if f.line else f.file
             blocks.append(f"\n### {loc} — {f.title}\n\n```\n{f.message}\n```\n")
@@ -917,9 +999,7 @@ def _build_dev_task(*, ticket: TicketRef, plan: PlanData) -> str:
     )
 
 
-def _build_pr_body(
-    *, ticket: TicketRef, plan: PlanData, criteria: list[str] | None = None
-) -> str:
+def _build_pr_body(*, ticket: TicketRef, plan: PlanData, criteria: list[str] | None = None) -> str:
     """Markdown body for the GitHub PR."""
     body = ticket.body or "(no description)"
     criteria_block = ""
@@ -927,9 +1007,7 @@ def _build_pr_body(
         # Reviewers get the same checklist the tests were generated from,
         # so "is this actually done?" is answerable without reading specs.
         items = "\n".join(f"- [ ] {c}" for c in criteria)
-        criteria_block = (
-            f"### Acceptance criteria (verified end-to-end)\n\n{items}\n\n---\n\n"
-        )
+        criteria_block = f"### Acceptance criteria (verified end-to-end)\n\n{items}\n\n---\n\n"
     return (
         f"### Ticket\n\n"
         f"**{ticket.title}** ({ticket.external_id})\n\n"

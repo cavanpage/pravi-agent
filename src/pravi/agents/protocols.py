@@ -244,6 +244,10 @@ class DevRunRequest:
     max_turns: int
     max_cost_usd: float
     model: str | None = None
+    # Bare pravi skill slugs (from the repo's `.builder/domains.yaml`
+    # `skills:` list) to load into this run via the pravi plugin. Empty
+    # → no plugin, byte-identical SDK options to before.
+    skills: list[str] = field(default_factory=list)
 
 
 @dataclass

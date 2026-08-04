@@ -4,6 +4,7 @@ Catches: reordering the prompt that drops the persona block; a coming_soon
 entry sneaking a modifier in; the skills-list dedup regressing into
 duplicates or empty output.
 """
+
 from __future__ import annotations
 
 # Reused across tests — keep the boilerplate compact.
@@ -16,7 +17,7 @@ _BASE_KWARGS = dict(
 )
 
 
-def test_persona_modifier_and_skills_hint_appended():
+def test_persona_modifier_appended_without_phantom_skills():
     from pravi.prompts.developer import system_prompt
 
     sp = system_prompt(
@@ -25,10 +26,10 @@ def test_persona_modifier_and_skills_hint_appended():
         stack="python-fastapi",
     )
     assert "backend engineer" in sp.lower()
-    # Recommended-skills hint surfaces the union of baseline + stack-additional
-    # skills. backend.baseline=[]; python-fastapi.additional=[python, fastapi, pytest].
-    for skill in ("python", "fastapi", "pytest"):
-        assert f"`{skill}`" in sp, f"recommended skill {skill!r} missing from prompt"
+    # The old "Recommended Claude Skills" hint named skills that were
+    # never installed — real skills now load via the SDK plugin from the
+    # repo's `skills:` list, so the prompt must not fake them.
+    assert "Recommended Claude Skills" not in sp
 
 
 def test_coming_soon_persona_falls_back_to_generic():
@@ -62,16 +63,15 @@ def test_tester_persona_includes_test_only_guardrail():
     assert "must not change source code" in sp.lower() or "no source" in sp.lower()
 
 
-def test_unknown_stack_yields_no_extra_skills():
-    """Open-set: unknown stack slugs resolve to `unknown` (no additional
-    skills). Persona's baseline still applies."""
+def test_unknown_stack_is_tolerated():
+    """Open-set: unknown stack slugs resolve to `unknown` and never
+    break prompt construction (stack hints are UI metadata now)."""
     from pravi.prompts.developer import system_prompt
 
     sp_known = system_prompt(**_BASE_KWARGS, persona="backend", stack="python-fastapi")
     sp_unknown = system_prompt(**_BASE_KWARGS, persona="backend", stack="cobol-90")
-    # The known one names `fastapi`; the unknown one shouldn't.
-    assert "fastapi" in sp_known
-    assert "fastapi" not in sp_unknown
+    assert "backend engineer" in sp_known.lower()
+    assert "backend engineer" in sp_unknown.lower()
 
 
 def test_skills_hint_omitted_when_no_skills_resolved():

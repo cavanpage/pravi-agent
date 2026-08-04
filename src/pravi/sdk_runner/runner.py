@@ -9,6 +9,7 @@ Responsibilities (and only these):
 This module deliberately does NOT know about Temporal workflows, GitHub, or
 domain registries — those concerns belong in the activity that calls it.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -82,6 +83,14 @@ async def run_dev_agent(
     )
     if req.model:
         options.model = req.model
+    if req.skills:
+        # Skills load via pravi's local plugin, NOT via setting_sources —
+        # that keeps the hermetic `setting_sources=[]` above while still
+        # granting the repo's declared skills (plugin-namespaced names).
+        from pravi.skills import PLUGIN_PATH, qualified
+
+        options.plugins = [{"type": "local", "path": str(PLUGIN_PATH)}]
+        options.skills = qualified(req.skills)
 
     transcript: list[TranscriptEntry] = []
     result_msg: ResultMessage | None = None
@@ -177,9 +186,7 @@ async def run_dev_agent(
         await asyncio.wait_for(_consume(), timeout=req.max_wall_seconds)
     except TimeoutError:
         errors.append(f"dev agent exceeded wall-clock budget of {req.max_wall_seconds}s")
-        log.warning(
-            "dev_agent.timeout", cwd=str(cwd), wall_seconds=req.max_wall_seconds
-        )
+        log.warning("dev_agent.timeout", cwd=str(cwd), wall_seconds=req.max_wall_seconds)
     except ClaudeSDKError as e:
         errors.append(f"SDK error: {type(e).__name__}: {e}")
         log.error("dev_agent.sdk_error", cwd=str(cwd), error=str(e))

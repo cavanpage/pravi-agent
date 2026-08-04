@@ -8,6 +8,7 @@ Checks the two parent shapes:
 Skipped tasks come back with a human-readable reason so the UI can
 display "why this didn't start".
 """
+
 from __future__ import annotations
 
 import pytest
@@ -48,9 +49,7 @@ async def _mk_ticket(
     return t
 
 
-async def test_feature_parent_returns_all_pending_task_children(
-    test_prefix, test_repo: Repo
-):
+async def test_feature_parent_returns_all_pending_task_children(test_prefix, test_repo: Repo):
     async with session_scope() as session:
         epic = await _mk_ticket(
             session,
@@ -101,9 +100,7 @@ async def test_feature_parent_returns_all_pending_task_children(
     assert "in_progress" in report.ineligible[0][1]
 
 
-async def test_epic_parent_no_deps_starts_everything_pending(
-    test_prefix, test_repo: Repo
-):
+async def test_epic_parent_no_deps_starts_everything_pending(test_prefix, test_repo: Repo):
     """Epic with no feature dependencies → all features are 'ready'
     (no prerequisites). All pending tasks across all features eligible."""
     async with session_scope() as session:
@@ -146,9 +143,7 @@ async def test_epic_parent_no_deps_starts_everything_pending(
     assert report.ineligible == []
 
 
-async def test_epic_parent_blocks_tasks_in_dependent_features(
-    test_prefix, test_repo: Repo
-):
+async def test_epic_parent_blocks_tasks_in_dependent_features(test_prefix, test_repo: Repo):
     """f2 depends on f1. f1 still has pending tasks → f2's tasks are
     NOT eligible. Reason mentions the blocker by name."""
     async with session_scope() as session:
@@ -209,11 +204,10 @@ async def test_epic_parent_blocks_tasks_in_dependent_features(
     assert "API" in reason  # blocker feature title surfaced
 
 
-async def test_epic_parent_unblocks_dependent_when_prereq_done(
-    test_prefix, test_repo: Repo
-):
-    """f2 depends on f1. f1's only task is at pr_open (done from the
-    dev perspective) → f2 becomes ready → its tasks are eligible."""
+async def test_epic_parent_unblocks_dependent_when_prereq_done(test_prefix, test_repo: Repo):
+    """f2 depends on f1. f1's only task is MERGED (an open PR no longer
+    counts — the work isn't on the base branch until merge) → f2 becomes
+    ready → its tasks are eligible."""
     async with session_scope() as session:
         epic = await _mk_ticket(
             session,
@@ -243,7 +237,7 @@ async def test_epic_parent_unblocks_dependent_when_prereq_done(
             external_id=f"{test_prefix}f1-t1",
             kind=TicketKind.task,
             parent_id=f1.id,
-            status=TicketStatus.pr_open,
+            status=TicketStatus.merged,
         )
         # f2's task is pending — should now be eligible.
         await _mk_ticket(
@@ -259,7 +253,7 @@ async def test_epic_parent_unblocks_dependent_when_prereq_done(
         report = await _resolve_eligible_tasks(session, epic)
 
     eligible_ids = [t.external_id for t in report.eligible]
-    # f1's task is already done → not eligible (already at pr_open).
+    # f1's task is already done → not eligible (already merged).
     # f2's task is now ready → eligible.
     assert f"{test_prefix}f2-t1" in eligible_ids
     assert f"{test_prefix}f1-t1" not in eligible_ids

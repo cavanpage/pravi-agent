@@ -36,6 +36,8 @@ from pravi.activities.db_activity import (
 from pravi.activities.dev_activity import DevActivityRequest, DevActivityResult
 from pravi.activities.e2e_activity import RunE2ERequest, RunE2EResult
 from pravi.activities.pr_activity import (
+    CheckPRStateRequest,
+    CheckPRStateResult,
     OpenPRRequest,
     OpenPRResult,
     PushBranchRequest,
@@ -73,7 +75,7 @@ TASK_QUEUE = "test-features"
 BODY_WITH_CRITERIA = (
     "Build the todo list.\n\n"
     "## Acceptance criteria\n\n"
-    "- [ ] Visiting / shows a heading \"Today's tasks\".\n"
+    '- [ ] Visiting / shows a heading "Today\'s tasks".\n'
 )
 BODY_WITHOUT_CRITERIA = "Refactor the store. No user-visible change."
 
@@ -107,6 +109,7 @@ class Recorder:
         poll_script: list[PreviewDeployment] | None = None,
         push_script: list[PushBranchResult] | None = None,
         dev_script: list[DevActivityResult] | None = None,
+        pr_state_script: list[str] | None = None,
     ) -> None:
         self.body = body
         self.preview = preview
@@ -114,6 +117,11 @@ class Recorder:
         self.poll_script = poll_script or [_deployed()]
         self.push_script = push_script or []
         self.dev_script = dev_script or []
+        # Wait-for-merge poll answers. Default: the PR merges on the first
+        # poll, so tests exercise the full open → merged lifecycle without
+        # hundreds of time-skipped polls.
+        self.pr_state_script = pr_state_script or ["merged"]
+        self._pr_state_n = 0
         self.calls: list[str] = []
         self.dev_tasks: list[str] = []
         self.dev_iterations: list[int] = []
@@ -237,6 +245,11 @@ class Recorder:
             rec.calls.append("run_e2e")
             return rec._next(rec.e2e_script, "_e2e_n")
 
+        @activity.defn(name="check_pr_state")
+        async def check_pr_state_(req: CheckPRStateRequest) -> CheckPRStateResult:
+            rec.calls.append("check_pr_state")
+            return CheckPRStateResult(state=rec._next(rec.pr_state_script, "_pr_state_n"))
+
         @activity.defn(name="record_preview_outcome")
         async def record(req: RecordPreviewOutcomeRequest) -> None:
             rec.recorded_outcomes.append(req)
@@ -255,6 +268,7 @@ class Recorder:
             poll,
             logs,
             run_e2e_,
+            check_pr_state_,
             record,
         ]
 
@@ -266,7 +280,7 @@ def _dev(*, success: bool = True, stop_reason: str | None = None) -> DevActivity
     return DevActivityResult(
         success=success,
         summary="did the thing",
-        prompt_version="dev/v3",
+        prompt_version="dev/v4",
         stop_reason=stop_reason,
         num_turns=3,
         duration_ms=1000,
@@ -352,9 +366,7 @@ async def test_passes_on_the_first_attempt():
 
 
 async def test_fails_twice_then_passes_on_one_pr():
-    rec = Recorder(
-        e2e_script=[_e2e(passed=False), _e2e(passed=False), _e2e(passed=True)]
-    )
+    rec = Recorder(e2e_script=[_e2e(passed=False), _e2e(passed=False), _e2e(passed=True)])
     result = await _run(rec)
 
     assert result.verdict == VERDICT_PASSED
@@ -462,9 +474,7 @@ async def test_preview_timeout_never_spends_a_repair_run():
     assert result.verdict == VERDICT_TIMED_OUT
     assert rec.count("run_e2e") == 0
     assert rec.count("run_dev") == 1  # the initial build only
-    assert result.give_up_reason and "no preview deployment appeared" in (
-        result.give_up_reason
-    )
+    assert result.give_up_reason and "no preview deployment appeared" in (result.give_up_reason)
 
 
 async def test_budget_exhaustion_stops_the_loop_immediately():
@@ -555,10 +565,22 @@ async def test_verdict_and_preview_url_are_persisted():
 
 
 async def test_a_red_suite_still_reports_the_pr_as_open():
-    """The verdict is a separate axis from the workflow status."""
+    """The verdict is a separate axis from the workflow status: the PR
+    opens (red suite or not), and the ticket then closes on merge."""
     rec = Recorder(e2e_script=[_e2e(passed=False)])
     await _run(rec, max_e2e_attempts=1)
-    assert rec.statuses[-1] == "pr_open"
+    assert "pr_open" in rec.statuses
+    # The default mock merges the PR on the first poll — the wait-for-
+    # merge loop must flip the ticket to merged, not leave it at pr_open.
+    assert rec.statuses[-1] == "merged"
+
+
+async def test_pr_closed_without_merge_cancels_the_ticket():
+    rec = Recorder(pr_state_script=["open", "closed"])
+    await _run(rec, max_e2e_attempts=1)
+    assert "pr_open" in rec.statuses
+    assert rec.statuses[-1] == "cancelled"
+    assert "pr_closed" in rec.events
 
 
 async def test_missing_specs_are_fed_back_as_a_repair_signal():
