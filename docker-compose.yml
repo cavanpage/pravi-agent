@@ -1,3 +1,39 @@
+# Shared config for every pravi python service (web + workers + init).
+# `x-` prefix marks it as a compose extension — services opt in via YAML anchors.
+x-pravi-python: &pravi-python
+  build:
+    context: .
+    dockerfile: Dockerfile
+  # `env_file` loads .env verbatim; the explicit `environment:` below then
+  # overrides the network-related settings so containers reach each other by
+  # service DNS instead of localhost.
+  env_file:
+    - .env
+  environment:
+    # Postgres is `postgres:5432` inside the compose network (not localhost:5433).
+    PRAVI_DB_URL: postgresql+asyncpg://pravi:pravi@postgres:5432/pravi
+    PRAVI_TEMPORAL_HOST: temporal:7233
+    # Web URL the CLI logs; keep it host-facing because links are for the browser.
+    PRAVI_WEB_URL_BASE: http://localhost:8765
+  volumes:
+    # Auth: writable claude-auth dir populated by scripts/bootstrap-claude-auth.sh
+    # (extracts your host `claude login` session — macOS Keychain or Linux
+    # ~/.claude/.credentials.json — into the shared mount). The container's
+    # `claude` CLI reads from this dir and silently refreshes tokens in-place,
+    # so subsequent runs stay authenticated without re-running bootstrap.
+    #
+    # Why not mount ~/.claude directly? On macOS the credential lives in
+    # Keychain (unreachable from a Linux container). Even on Linux, mounting
+    # the same dir the host CLI writes to risks the container clobbering your
+    # host session on `claude logout`, so we deliberately isolate.
+    - ${HOME}/.pravi/claude-auth:/home/pravi/.claude
+    # Persistent worktree + logs state — survives container recreation.
+    - ${HOME}/.pravi:/home/pravi/.pravi
+    # Where your target repos live. Default: $HOME/repos on the host,
+    # mounted at /repos in the container. Set PRAVI_TARGET_REPOS to
+    # /repos/<your-repo> in .env (paths are container-side).
+    - ${PRAVI_HOST_REPOS_DIR:-${HOME}/repos}:/repos
+
 services:
   postgres:
     image: postgres:16-alpine
@@ -30,6 +66,17 @@ services:
       POSTGRES_SEEDS: temporal-postgres
     ports:
       - "7233:7233"
+    # tctl exits 0 once the frontend accepts requests. Used by the init
+    # services below to hold off until Temporal is really up (auto-setup
+    # takes ~15s on cold start).
+    # NB: temporal-server binds only to its container IP (not 127.0.0.1),
+    # so we hit it via the service DNS name `temporal` — that resolves
+    # via docker's embedded DNS to the container's own IP from the inside.
+    healthcheck:
+      test: ["CMD-SHELL", "tctl --address temporal:7233 cluster health || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
 
   temporal-postgres:
     image: postgres:16-alpine
@@ -56,6 +103,96 @@ services:
       TEMPORAL_CORS_ORIGINS: http://localhost:3000
     ports:
       - "8233:8080"
+
+  # -------- pravi runtime (web + workers) --------
+  #
+  # These four services all share the same image + env config via the
+  # `<<: *pravi-python` YAML anchor at the top of this file. Overrides per
+  # service: `command:` and any additional depends_on / restart policy.
+
+  # One-shot: apply Alembic migrations, then exit. Web + workers wait for
+  # its `service_completed_successfully` before starting so they never race
+  # against an unmigrated DB.
+  pravi-db-init:
+    <<: *pravi-python
+    container_name: pravi-db-init
+    depends_on:
+      postgres:
+        condition: service_healthy
+    command: ["uv", "run", "alembic", "upgrade", "head"]
+    restart: "no"
+
+  # One-shot: register pravi's Temporal search attributes. Uses the
+  # temporalio/admin-tools image (has the `temporal` CLI) rather than our
+  # runtime image (which doesn't) — so no python deps needed here.
+  pravi-temporal-init:
+    # NB: admin-tools tags don't mirror the server exactly — the format is
+    # <server>-tctl-<v>-cli-<v>. This is the exact match for the 1.29.6.1
+    # server image above.
+    image: temporalio/admin-tools:1.29.6.1-tctl-1.18.4-cli-1.7.0
+    container_name: pravi-temporal-init
+    depends_on:
+      temporal:
+        condition: service_healthy
+    environment:
+      TEMPORAL_ADDRESS: temporal:7233
+    volumes:
+      - ./scripts/register-temporal-attrs.sh:/register-temporal-attrs.sh:ro
+    entrypoint: ["/bin/sh", "/register-temporal-attrs.sh"]
+    restart: "no"
+
+  pravi-web:
+    <<: *pravi-python
+    container_name: pravi-web
+    depends_on:
+      pravi-db-init:
+        condition: service_completed_successfully
+      pravi-temporal-init:
+        condition: service_completed_successfully
+    ports:
+      - "8765:8765"
+    # Default CMD in the Dockerfile already runs the web server; kept
+    # explicit here so it's obvious per-service.
+    command:
+      ["uv", "run", "pravi", "web", "--host", "0.0.0.0", "--port", "8765"]
+    restart: unless-stopped
+
+  # Features pool — orchestration + cheap activities (git, github, deploy).
+  # No LLM spend here; can run at higher concurrency.
+  pravi-worker-features:
+    <<: *pravi-python
+    container_name: pravi-worker-features
+    depends_on:
+      pravi-db-init:
+        condition: service_completed_successfully
+      pravi-temporal-init:
+        condition: service_completed_successfully
+    command:
+      ["uv", "run", "python", "-m", "pravi.worker", "--queue", "features"]
+    restart: unless-stopped
+
+  # LLM pool — token-burning activities (dev agent). Capped at 2 concurrent
+  # so a runaway ticket can't spike Anthropic spend. Needs ~/.claude
+  # bind-mount (inherited from the pravi-python anchor) for Max auth.
+  pravi-worker-llm:
+    <<: *pravi-python
+    container_name: pravi-worker-llm
+    depends_on:
+      pravi-db-init:
+        condition: service_completed_successfully
+      pravi-temporal-init:
+        condition: service_completed_successfully
+    command:
+      - "uv"
+      - "run"
+      - "python"
+      - "-m"
+      - "pravi.worker"
+      - "--queue"
+      - "llm"
+      - "--max-activities"
+      - "2"
+    restart: unless-stopped
 
 volumes:
   pravi_postgres_data:

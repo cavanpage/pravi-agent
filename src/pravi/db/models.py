@@ -133,6 +133,15 @@ class Ticket(Base, TimestampMixin):
     # blow through the ceiling.
     cost_ceiling_usd: Mapped[float | None] = mapped_column(Float, nullable=True)
 
+    # Per-stage Claude model pins. Null on every field means "inherit"
+    # (parent → env default → SDK default). Same resolution shape as
+    # cost_ceiling_usd: set once on the epic, cascades to every descendant
+    # unless overridden. See `pravi.agents.models_config`.
+    clarify_model: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    decompose_model: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    draft_model: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    dev_model: Mapped[str | None] = mapped_column(String(128), nullable=True)
+
     repo: Mapped[Repo] = relationship(back_populates="tickets")
     plans: Mapped[list[Plan]] = relationship(back_populates="ticket")
     runs: Mapped[list[Run]] = relationship(back_populates="ticket")

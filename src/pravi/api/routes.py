@@ -29,7 +29,9 @@ from pravi.agents.protocols import (
     ClarifyRequest,
     DomainBrief,
 )
+from pravi.agents.models_config import MODEL_CATALOG
 from pravi.api.schemas import (
+    ModelOptionOut,
     AddDependencyRequest,
     AgentDraftOut,
     BudgetBreakdownOut,
@@ -323,6 +325,10 @@ def _ticket_to_out(
         child_status_counts=counts,
         preview_url=ticket.preview_url,
         e2e_verdict=ticket.e2e_verdict,
+        clarify_model=ticket.clarify_model,
+        decompose_model=ticket.decompose_model,
+        draft_model=ticket.draft_model,
+        dev_model=ticket.dev_model,
     )
 
 
@@ -637,6 +643,19 @@ def _domains_at(repo_root: Path, domains_file: str | None) -> list[DomainOut]:
     ]
 
 
+@router.get("/models", response_model=list[ModelOptionOut])
+async def list_models() -> list[ModelOptionOut]:
+    """Curated Claude model catalog for the ticket-form dropdown.
+
+    Single source of truth for both the UI options and server-side
+    validation. See `pravi.agents.models_config.MODEL_CATALOG`.
+    """
+    return [
+        ModelOptionOut(id=o.id, label=o.label, tier=o.tier, hint=o.hint)
+        for o in MODEL_CATALOG
+    ]
+
+
 @router.get("/personas", response_model=list[PersonaOut])
 async def list_personas() -> list[PersonaOut]:
     """The full persona catalog (active + coming_soon) — drives the
@@ -749,6 +768,18 @@ async def create_ticket(req: CreateTicketRequest) -> CreateTicketResult:
     """
     if not req.title.strip():
         raise HTTPException(status_code=400, detail="title is required")
+
+    # Reject unknown model IDs early — the curated catalog is small and
+    # a typo would otherwise only surface at first-run of the affected
+    # stage, which is a lot worse UX.
+    from pravi.agents.models_config import is_known_model
+    for stage_attr in ("clarify_model", "decompose_model", "draft_model", "dev_model"):
+        val = getattr(req, stage_attr)
+        if not is_known_model(val):
+            raise HTTPException(
+                status_code=400,
+                detail=f"unknown {stage_attr!r}: {val!r} (see /api/models for valid ids)",
+            )
 
     try:
         kind = TicketKind(req.kind)
@@ -952,6 +983,10 @@ async def create_ticket(req: CreateTicketRequest) -> CreateTicketResult:
                 github_issue_url=github_issue_url,
                 persona=resolved_persona,
                 stack=resolved_stack,
+                clarify_model=req.clarify_model,
+                decompose_model=req.decompose_model,
+                draft_model=req.draft_model,
+                dev_model=req.dev_model,
             )
             session.add(ticket)
             await session.flush()
@@ -971,6 +1006,11 @@ async def create_ticket(req: CreateTicketRequest) -> CreateTicketResult:
                 existing_ticket.persona = req.persona
             if req.stack is not None:
                 existing_ticket.stack = req.stack
+            # Model pins: mirror cost_ceiling_usd — null clears back to inheritance.
+            existing_ticket.clarify_model = req.clarify_model
+            existing_ticket.decompose_model = req.decompose_model
+            existing_ticket.draft_model = req.draft_model
+            existing_ticket.dev_model = req.dev_model
             ticket_id = existing_ticket.id
 
     settings = get_settings()

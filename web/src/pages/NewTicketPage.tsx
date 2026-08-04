@@ -5,6 +5,7 @@ import { useMutation, useQuery } from "@tanstack/react-query";
 import { api, GitHubRepoRef, GitHubRepoResult, TicketKind } from "../lib/api";
 import { PersonaPicker } from "../components/PersonaPicker";
 import { CreateRepoModal } from "../components/CreateRepoModal";
+import { ModelPickerRow } from "../components/ModelPickerRow";
 
 // Kind-specific guidance so the form makes sense for epics + features too.
 const KIND_LABELS: Record<TicketKind, string> = {
@@ -50,6 +51,14 @@ export function NewTicketPage() {
   const [stack, setStack] = useState<string | null>(null);
   // Optional cumulative spend cap. Empty = inherit from parent / env default.
   const [ceilingUsd, setCeilingUsd] = useState("");
+  // Per-stage Claude model pins. Null = inherit from parent → env → SDK
+  // default. Hidden behind the "advanced" toggle so the common case (no
+  // pins) has zero form clutter.
+  const [clarifyModel, setClarifyModel] = useState<string | null>(null);
+  const [decomposeModel, setDecomposeModel] = useState<string | null>(null);
+  const [draftModel, setDraftModel] = useState<string | null>(null);
+  const [devModel, setDevModel] = useState<string | null>(null);
+  const [showAdvancedModels, setShowAdvancedModels] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const personasQ = useQuery({
@@ -61,6 +70,11 @@ export function NewTicketPage() {
     queryKey: ["stacks"],
     queryFn: () => api.listStacks(),
     staleTime: 5 * 60_000,
+  });
+  const modelsQ = useQuery({
+    queryKey: ["models"],
+    queryFn: () => api.listModels(),
+    staleTime: 60 * 60_000,
   });
 
   // Load the parent if there is one — for inheritance + display.
@@ -98,6 +112,24 @@ export function NewTicketPage() {
     // Inherit persona + stack so children default to "same kind of work".
     if (parentQ.data?.persona) setPersona(parentQ.data.persona);
     if (parentQ.data?.stack) setStack(parentQ.data.stack);
+    // Inherit model pins so a user picking a model on an epic doesn't
+    // have to re-pick on every child. resolve_stage_model on the backend
+    // also walks the chain — but pre-filling here means the user SEES
+    // what's inherited and can override with intent.
+    if (parentQ.data?.clarify_model) setClarifyModel(parentQ.data.clarify_model);
+    if (parentQ.data?.decompose_model) setDecomposeModel(parentQ.data.decompose_model);
+    if (parentQ.data?.draft_model) setDraftModel(parentQ.data.draft_model);
+    if (parentQ.data?.dev_model) setDevModel(parentQ.data.dev_model);
+    // Auto-expand advanced section if anything was inherited so the user
+    // notices what's already set.
+    if (
+      parentQ.data?.clarify_model ||
+      parentQ.data?.decompose_model ||
+      parentQ.data?.draft_model ||
+      parentQ.data?.dev_model
+    ) {
+      setShowAdvancedModels(true);
+    }
   }, [parentQ.data]);
 
   // Whether the user has connected GitHub — drives the search picker.
@@ -209,6 +241,11 @@ export function NewTicketPage() {
         // parent inherit (server-side), then catalog defaults.
         persona,
         stack,
+        // Per-stage model pins. Null = inherit from parent → env → SDK.
+        clarify_model: clarifyModel,
+        decompose_model: decomposeModel,
+        draft_model: draftModel,
+        dev_model: devModel,
       }),
     onSuccess: (res) => {
       setError(null);
@@ -473,6 +510,84 @@ export function NewTicketPage() {
             </span>
           ) : null}
         </Field>
+
+        {/* Per-stage model pins. Collapsed by default so the common case
+            (no pins → SDK default via env) has zero form clutter. Anything
+            inherited from a parent auto-expands this section (see effect
+            above). */}
+        <div className="rounded-2xl border border-white/10 bg-white/[0.02] px-4 py-3">
+          <button
+            type="button"
+            onClick={() => setShowAdvancedModels((x) => !x)}
+            className="w-full flex items-center justify-between text-left"
+          >
+            <div>
+              <div className="text-xs font-medium text-neutral-200">
+                Model pins {showAdvancedModels ? "" : "(advanced)"}
+              </div>
+              <div className="text-[11px] text-neutral-500 mt-0.5 leading-snug">
+                Override the Claude model per stage. Blank = inherit from parent
+                → env → SDK default. Cascades to descendants.
+              </div>
+            </div>
+            <span
+              className={`text-neutral-500 text-sm transition-transform ${
+                showAdvancedModels ? "rotate-90" : ""
+              }`}
+            >
+              ›
+            </span>
+          </button>
+          {showAdvancedModels ? (
+            <div className="mt-3 flex flex-col gap-3">
+              {kind !== "task" ? (
+                <>
+                  <ModelPickerRow
+                    label="Clarify"
+                    hint="Runs on epic creation; asks 2–5 questions."
+                    models={modelsQ.data}
+                    value={clarifyModel}
+                    onChange={setClarifyModel}
+                  />
+                  <ModelPickerRow
+                    label="Decompose"
+                    hint="Splits an epic into features + tasks."
+                    models={modelsQ.data}
+                    value={decomposeModel}
+                    onChange={setDecomposeModel}
+                  />
+                </>
+              ) : null}
+              <ModelPickerRow
+                label="Draft plan"
+                hint={
+                  kind === "task"
+                    ? "Runs before the dev agent; produces the plan you approve."
+                    : "Runs on child tasks; produces the plan the reviewer approves."
+                }
+                models={modelsQ.data}
+                value={draftModel}
+                onChange={setDraftModel}
+              />
+              <ModelPickerRow
+                label="Dev agent"
+                hint={
+                  kind === "task"
+                    ? "Executes the approved plan in a worktree. Highest downstream impact."
+                    : "Runs on child tasks. Highest downstream impact."
+                }
+                models={modelsQ.data}
+                value={devModel}
+                onChange={setDevModel}
+              />
+              {modelsQ.isError ? (
+                <div className="text-xs text-rose-400">
+                  Model catalog failed to load: {(modelsQ.error as Error).message}
+                </div>
+              ) : null}
+            </div>
+          ) : null}
+        </div>
 
         <div className="flex gap-4 items-center mt-2">
           <button

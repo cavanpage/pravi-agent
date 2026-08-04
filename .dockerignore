@@ -1,0 +1,37 @@
+# Exclude anything that would either bloat the image or leak host state.
+
+# Version control + editor scratch
+.git
+.gitignore
+.vscode
+.idea
+.DS_Store
+
+# Python virtualenv + caches (uv installs fresh inside the image)
+.venv
+__pycache__
+*.pyc
+.mypy_cache
+.pytest_cache
+.ruff_cache
+
+# Frontend build artifacts (the image rebuilds web/dist from source)
+web/node_modules
+web/dist
+web/tsconfig.tsbuildinfo
+
+# Local runtime state
+.pravi
+
+# Local env — .env is bind-mounted at runtime, not baked into the image
+.env
+.env.local
+
+# Docs / dev-only assets not needed at runtime
+docs
+adr
+tests
+
+# Docker itself
+Dockerfile
+.dockerignore

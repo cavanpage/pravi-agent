@@ -146,12 +146,57 @@ Principles:
 
 ## Quickstart
 
+### Docker (zero host toolchain, one command)
+
+Only prerequisite: Docker. No Python, no node, no `uv`.
+
+```bash
+cp .env.example .env
+# Edit .env: set PRAVI_TARGET_REPOS=/repos/<your-repo> (paths are
+# container-side; $HOME/repos is bind-mounted at /repos by default,
+# override with PRAVI_HOST_REPOS_DIR).
+
+# One-time: copy your host Claude session into the container-visible
+# auth dir. On macOS this reads from Keychain; on Linux it copies
+# ~/.claude/.credentials.json. Re-run when your session expires (rare).
+./scripts/bootstrap-claude-auth.sh
+
+docker compose up --build
+```
+
+Opens the app at <http://localhost:8765>. First boot compiles the image
+(~2–3 min); subsequent starts are seconds.
+
+The bootstrap script writes to `~/.pravi/claude-auth/` on your host and
+that dir is bind-mounted into all three pravi services, so `docker
+compose down` doesn't touch it. The container CLI silently refreshes
+the token in-place so you shouldn't need to re-run bootstrap for months.
+If you'd rather use a paid API key instead, set `ANTHROPIC_API_KEY` in
+`.env` and skip the bootstrap step.
+
+Compose brings up Postgres, Temporal, Temporal UI, plus three pravi
+services (web + features worker + LLM worker) and two one-shot init
+containers (Alembic migrations + Temporal search attributes). Your
+`~/.pravi/claude-auth`, `~/.pravi`, and `$HOME/repos` are bind-mounted
+into the workers so worktrees + Claude auth survive across `docker
+compose down`.
+
+Caveats worth knowing:
+- **Bind-mount IO on macOS is slower** than native — worktree ops feel
+  ~2× slower than `dev.sh`. Fine for trying pravi, use `dev.sh` for
+  heavy iteration.
+- **Dev-agent target-repo tooling** — the image ships with `git`, `node`
+  and `python`. If your target repo needs anything else (`go`, `bun`,
+  `poetry`, …) add it to the `Dockerfile`'s runtime stage.
+
+### Host setup (for developing pravi itself)
+
 ```bash
 # Install
 uv sync --extra dev
 
 # Bring up Postgres + Temporal locally
-docker compose up -d
+docker compose up -d postgres temporal temporal-postgres temporal-ui
 
 # One-time: register pravi's custom Temporal search attributes
 ./scripts/setup-temporal.sh

@@ -192,12 +192,12 @@ export function HomePage() {
 
   return (
     <div className="max-w-4xl mx-auto px-6 sm:px-8 py-12">
-      <header className="flex items-center justify-between">
-        <div className="flex items-center gap-3">
+      <header className="flex flex-wrap items-center justify-between gap-y-3 gap-x-4">
+        <div className="flex items-center gap-3 shrink-0">
           <div className="size-8 rounded-xl bg-gradient-to-br from-blue-400 to-indigo-600 shadow-lg shadow-blue-500/30 ring-1 ring-white/10" />
           <h1 className="text-3xl font-semibold tracking-tight">pravi agent</h1>
         </div>
-        <div className="flex items-center gap-3">
+        <div className="flex flex-wrap items-center justify-end gap-2">
           {ticketsQ.isFetching ? (
             <span className="text-[11px] text-neutral-500 flex items-center gap-1.5">
               <span className="size-1.5 rounded-full bg-blue-400 animate-pulse" />
@@ -206,6 +206,7 @@ export function HomePage() {
           ) : null}
           <GitHubConnectButton />
           <CloudflareConnectButton />
+          <span className="w-px h-5 bg-white/10 mx-1" aria-hidden />
           <Link
             to="/issues"
             className="px-3 py-1.5 rounded-full bg-white/5 hover:bg-white/10 border border-white/10 text-sm font-medium transition"

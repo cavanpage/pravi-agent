@@ -177,6 +177,10 @@ async def _build_decompose_request(
         domain_name = ticket.domain_name
         repo_path = repo.local_path
         repo_name = repo.name
+        # Resolve effective decompose model while the ticket + session are
+        # in scope; walks parent chain.
+        from pravi.agents.models_config import resolve_stage_model
+        model = await resolve_stage_model(session, ticket, "decompose")
 
     registry = DomainRegistry.load(Path(repo_path))
     available = [
@@ -200,6 +204,7 @@ async def _build_decompose_request(
         max_wall_seconds=max(settings.architect_max_wall_seconds, 600),
         max_turns=settings.architect_max_turns,
         max_cost_usd=max(settings.architect_max_cost_usd, 2.0),
+        model=model,
     )
 
 
@@ -307,6 +312,9 @@ async def _build_plan_request(
         merged_body = build_ancestral_body(
             ancestors, str(ticket.kind), ticket.title, ticket.body or ""
         )
+        # Resolve effective draft (plan) model while the session is open.
+        from pravi.agents.models_config import resolve_stage_model
+        model = await resolve_stage_model(session, ticket, "draft")
 
     chosen_domain = domain_name or ticket.domain_name
     if not chosen_domain:
@@ -328,6 +336,7 @@ async def _build_plan_request(
             max_wall_seconds=settings.architect_max_wall_seconds,
             max_turns=settings.architect_max_turns,
             max_cost_usd=settings.architect_max_cost_usd,
+            model=model,
         ),
         chosen.name,
     )

@@ -80,6 +80,11 @@ async def _build_request(ticket_id: int) -> ClarifyRequest:
         domain_name = ticket.domain_name
         repo_path = repo.local_path
         repo_name = repo.name
+        # Resolve the effective model for this stage while we still have a
+        # session open (walks parent chain). None → architect falls back
+        # to its own default.
+        from pravi.agents.models_config import resolve_stage_model
+        model = await resolve_stage_model(session, ticket, "clarify")
 
     repo_root = Path(repo_path)
     registry = DomainRegistry.load(repo_root)
@@ -103,6 +108,7 @@ async def _build_request(ticket_id: int) -> ClarifyRequest:
         max_wall_seconds=settings.architect_max_wall_seconds,
         max_turns=settings.architect_max_turns,
         max_cost_usd=min(settings.architect_max_cost_usd, 0.5),
+        model=model,
     )
 
 

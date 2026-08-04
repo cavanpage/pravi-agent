@@ -16,7 +16,7 @@ If the workflow passes `ticket_id`, this activity also:
 """
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -81,6 +81,10 @@ class DevActivityRequest:
     # live panel mid-flight. Defaults True so every existing caller and
     # every pre-0007 event keeps today's behavior.
     terminal: bool = True
+    # Effective Claude model for this run — resolved by the workflow from
+    # the ticket's `dev_model` (walking parent chain, env fallback). None
+    # → dev-agent factory keeps the SDK on its own default (opus-5).
+    model: str | None = None
 
 
 @dataclass
@@ -120,6 +124,9 @@ def _build_request(req: DevActivityRequest) -> DevRunRequest:
         max_wall_seconds=settings.dev_max_wall_seconds,
         max_turns=settings.dev_max_turns,
         max_cost_usd=settings.dev_max_cost_usd,
+        # Explicit override wins; None lets ClaudeDevAgent fall back to
+        # whatever the factory built it with (settings.dev_model).
+        model=req.model,
     )
 
 
@@ -312,6 +319,20 @@ def _make_event_sink(ticket_id: int, run_id: int):
 async def run_dev(req: DevActivityRequest) -> DevActivityResult:
     if not Path(req.cwd).is_dir():
         raise FileNotFoundError(f"worktree missing: {req.cwd}")
+
+    # Resolve the effective dev_model from the ticket's inheritance chain
+    # if the caller didn't set one explicitly. Doing it here (not in the
+    # workflow) keeps the workflow deterministic — workflows can't do DB
+    # I/O directly.
+    if req.model is None and req.ticket_id is not None:
+        from pravi.agents.models_config import resolve_stage_model
+        from pravi.db.models import Ticket
+        async with session_scope() as session:
+            ticket_row = await session.get(Ticket, req.ticket_id)
+            if ticket_row is not None:
+                resolved = await resolve_stage_model(session, ticket_row, "dev")
+                if resolved:
+                    req = replace(req, model=resolved)
 
     sdk_req = _build_request(req)
     log.info(

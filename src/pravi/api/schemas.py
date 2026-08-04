@@ -58,6 +58,12 @@ class CreateTicketRequest(BaseModel):
     # (`other` / `unknown`). Inherited from parent if not set explicitly.
     persona: str | None = None
     stack: str | None = None
+    # Per-stage Claude model overrides. Null on each = inherit from parent
+    # → env default → SDK default. See `pravi.agents.models_config`.
+    clarify_model: str | None = None
+    decompose_model: str | None = None
+    draft_model: str | None = None
+    dev_model: str | None = None
 
 
 class CreateTicketResult(BaseModel):
@@ -65,6 +71,16 @@ class CreateTicketResult(BaseModel):
     ticket_id: int
     workflow_id: str | None  # None for epics/features (no workflow today)
     web_url: str
+
+
+class ModelOptionOut(BaseModel):
+    """One entry the /api/models endpoint returns; hydrates the ticket-
+    form dropdown. See `pravi.agents.models_config.MODEL_CATALOG`."""
+
+    id: str
+    label: str
+    tier: str  # flagship | balanced | fast | creative
+    hint: str
 
 
 class TicketOut(BaseModel):
@@ -102,6 +118,12 @@ class TicketOut(BaseModel):
     # env default / unlimited. See /tickets/{id}/cost-rollup for the
     # effective value after walking the chain.
     cost_ceiling_usd: float | None = None
+    # Per-stage Claude model overrides. Null = inherit from parent → env
+    # → SDK default. See /api/models for the curated list.
+    clarify_model: str | None = None
+    decompose_model: str | None = None
+    draft_model: str | None = None
+    dev_model: str | None = None
     # Ephemeral preview + e2e verdict (ADR 0007). Both null on tickets that
     # never ran the leg. The verdict is a separate axis from `status`: a PR
     # can be open while its acceptance tests are red.

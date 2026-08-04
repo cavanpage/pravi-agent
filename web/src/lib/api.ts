@@ -57,7 +57,26 @@ export interface Ticket {
   /** ADR 0007 — end-to-end outcome. A separate axis from `status`: a PR
    * can be open while its acceptance tests are red. */
   e2e_verdict: E2EVerdict | null;
+  /** Per-stage Claude model pins. Null = inherit from parent → env → SDK
+   * default. See /api/models for the valid ids. */
+  clarify_model: string | null;
+  decompose_model: string | null;
+  draft_model: string | null;
+  dev_model: string | null;
 }
+
+/** Curated Claude model catalog returned by GET /api/models — powers the
+ * ticket-form dropdown. Backend validates against the same list. */
+export interface ModelOption {
+  id: string;
+  label: string;
+  tier: "flagship" | "balanced" | "fast" | "creative";
+  hint: string;
+}
+
+/** Per-stage model override slug. Matches the backend's Stage tuple in
+ * `pravi.agents.models_config`. */
+export type ModelStage = "clarify" | "decompose" | "draft" | "dev";
 
 export type E2EVerdict =
   | "skipped_no_criteria"
@@ -532,6 +551,12 @@ export interface CreateTicketInput {
   // null stack = `unknown`.
   persona?: string | null;
   stack?: string | null;
+  // Per-stage Claude model overrides. Null/omitted = inherit from parent
+  // → env → SDK default. See /api/models for the valid ids.
+  clarify_model?: string | null;
+  decompose_model?: string | null;
+  draft_model?: string | null;
+  dev_model?: string | null;
 }
 
 export interface CreateTicketResult {
@@ -758,6 +783,10 @@ export const api = {
   listPersonas: () => jsonReq<Persona[]>("/api/personas"),
 
   listStacks: () => jsonReq<Stack[]>("/api/stacks"),
+
+  /** Curated Claude model catalog for the ticket-form dropdown. Backend
+   * validates create payloads against the same list. */
+  listModels: () => jsonReq<ModelOption[]>("/api/models"),
 
   /** Per-persona spend rollup. `window` defaults to "all"; pass "7d" or
    * "30d" to scope. `repoId` optionally filters to one repo. */

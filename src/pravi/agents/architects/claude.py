@@ -171,8 +171,12 @@ class ClaudeArchitect:
             setting_sources=[],
             include_partial_messages=on_text is not None,
         )
-        if self.draft_model:
-            options.model = self.draft_model
+        # Per-call override wins over the impl's default; either wins over
+        # the SDK default. Route handlers set req.model from the ticket's
+        # resolved draft_model when calling in.
+        effective_model = req.model or self.draft_model
+        if effective_model:
+            options.model = effective_model
 
         buf = _StreamBuf()
         result_msg: ResultMessage | None = None
@@ -183,7 +187,8 @@ class ClaudeArchitect:
         log.info(
             "architect.draft.starting",
             cwd=str(cwd),
-            model=self.draft_model,
+            model=effective_model,
+            model_source="request" if req.model else "impl_default",
             max_wall_seconds=req.max_wall_seconds,
             max_turns=req.max_turns,
             max_cost_usd=req.max_cost_usd,
@@ -316,8 +321,9 @@ class ClaudeArchitect:
             setting_sources=[],
             include_partial_messages=on_text is not None,
         )
-        if self.decompose_model:
-            options.model = self.decompose_model
+        effective_model = req.model or self.decompose_model
+        if effective_model:
+            options.model = effective_model
 
         buf = _StreamBuf()
         result_msg: ResultMessage | None = None
@@ -328,7 +334,8 @@ class ClaudeArchitect:
         log.info(
             "architect.decompose.starting",
             cwd=str(cwd),
-            model=self.decompose_model,
+            model=effective_model,
+            model_source="request" if req.model else "impl_default",
             max_wall_seconds=req.max_wall_seconds,
             max_turns=req.max_turns,
             max_cost_usd=req.max_cost_usd,
@@ -457,8 +464,9 @@ class ClaudeArchitect:
             setting_sources=[],
             include_partial_messages=on_text is not None,
         )
-        if self.clarify_model:
-            options.model = self.clarify_model
+        effective_model = req.model or self.clarify_model
+        if effective_model:
+            options.model = effective_model
 
         buf = _StreamBuf()
         result_msg: ResultMessage | None = None
@@ -469,7 +477,8 @@ class ClaudeArchitect:
         log.info(
             "architect.clarify.starting",
             cwd=str(cwd),
-            model=self.clarify_model,
+            model=effective_model,
+            model_source="request" if req.model else "impl_default",
             max_wall_seconds=req.max_wall_seconds,
             max_turns=req.max_turns,
             max_cost_usd=req.max_cost_usd,

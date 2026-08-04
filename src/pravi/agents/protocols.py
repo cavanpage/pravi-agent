@@ -41,6 +41,10 @@ class ArchitectRequest:
     max_wall_seconds: int = 300
     max_turns: int = 30
     max_cost_usd: float = 1.0
+    # Optional per-call model override — set from the ticket's resolved
+    # `draft_model` when the route resolves it. None → architect impl
+    # falls back to whatever the factory built it with.
+    model: str | None = None
 
 
 @dataclass
@@ -124,6 +128,8 @@ class ClarifyRequest:
     max_wall_seconds: int = 300
     max_turns: int = 20
     max_cost_usd: float = 0.5
+    # See ArchitectRequest.model.
+    model: str | None = None
 
 
 @dataclass
@@ -164,6 +170,8 @@ class DecomposeRequest:
     max_wall_seconds: int = 600
     max_turns: int = 30
     max_cost_usd: float = 2.0
+    # See ArchitectRequest.model.
+    model: str | None = None
 
 
 @dataclass
