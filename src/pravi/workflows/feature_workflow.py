@@ -539,6 +539,7 @@ class FeatureWorkflow:
                 owner=pr_owner,
                 repo=pr_repo,
                 pr_number=pr_result.pr_number,
+                handle=handle,
             )
 
         return result
@@ -556,7 +557,15 @@ class FeatureWorkflow:
             retry_policy=RetryPolicy(maximum_attempts=2),
         )
 
-    async def _await_merge(self, *, ticket_id: int, owner: str, repo: str, pr_number: int) -> None:
+    async def _await_merge(
+        self,
+        *,
+        ticket_id: int,
+        owner: str,
+        repo: str,
+        pr_number: int,
+        handle: SandboxHandle,
+    ) -> None:
         """Durable wait for the human review gate: the ticket closes when
         the PR merges, not when it opens.
 
@@ -566,8 +575,11 @@ class FeatureWorkflow:
         stop and leave the ticket at `pr_open` — a stale PR shouldn't
         keep a workflow alive forever, and the status can still be fixed
         by re-running or manually.
+
+        However it ends, the per-ticket worktree is reaped on the way out.
         """
         self._status = STATUS_AWAITING_MERGE
+        settled = False
         for poll in range(_MERGE_MAX_POLLS):
             await workflow.sleep(_merge_poll_backoff(poll))
             state: CheckPRStateResult = await workflow.execute_activity(
@@ -589,7 +601,8 @@ class FeatureWorkflow:
                     f"PR #{pr_number} merged — ticket closed",
                     {"pr_number": pr_number, "owner": owner, "repo": repo},
                 )
-                return
+                settled = True
+                break
             if state.state == "closed":
                 await workflow.execute_activity(
                     update_ticket_status,
@@ -603,14 +616,42 @@ class FeatureWorkflow:
                     f"PR #{pr_number} closed without merging — ticket cancelled",
                     {"pr_number": pr_number, "owner": owner, "repo": repo},
                 )
-                return
+                settled = True
+                break
             # "open" and "unknown" both mean keep waiting.
-        await self._emit(
-            ticket_id,
-            "merge_watch_expired",
-            f"stopped watching PR #{pr_number} after ~7 days; still open",
-            {"pr_number": pr_number},
-        )
+        if not settled:
+            await self._emit(
+                ticket_id,
+                "merge_watch_expired",
+                f"stopped watching PR #{pr_number} after ~7 days; still open",
+                {"pr_number": pr_number},
+            )
+        await self._reap_worktree(handle)
+
+    async def _reap_worktree(self, handle: SandboxHandle) -> None:
+        """Delete the per-ticket worktree now that the PR has settled.
+
+        This is the first provably-safe moment to do it: until the PR is
+        merged or closed, a repair run may still need to push from this
+        worktree. Before the merge watch existed the workflow simply
+        ended at `pr_open`, so worktrees accumulated on the worker host
+        indefinitely.
+
+        The REMOTE branch is not touched here — `cleanup` can't delete it
+        post-handle, and GitHub reaps it itself via `delete_branch_on_merge`
+        (set on repos pravi creates). Best-effort: a failed reap must never
+        fail an otherwise-successful ticket, and `cleanup_sandbox` is
+        idempotent, so double-reaping an already-cleaned worktree is fine.
+        """
+        try:
+            await workflow.execute_activity(
+                cleanup_sandbox,
+                CleanupRequest(handle=handle, delete_branch=False),
+                start_to_close_timeout=timedelta(minutes=2),
+                retry_policy=RetryPolicy(maximum_attempts=2),
+            )
+        except Exception as e:  # noqa: BLE001 — cleanup is never fatal
+            workflow.logger.warning("worktree reap failed; leaving it on disk: %s", e)
 
     async def _run_dev(
         self,

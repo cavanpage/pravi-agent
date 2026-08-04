@@ -49,3 +49,15 @@ def test_domains_file_rejects_unknown_skill():
     raw = yaml.safe_load(MINIMAL + "skills:\n  - kubernetes-deploy\n")
     with pytest.raises(Exception, match="unknown skills"):
         DomainsFile.model_validate(raw)
+
+
+def test_created_repos_auto_delete_merged_branches():
+    """pravi opens a branch per ticket — without this GitHub setting each
+    merged ticket leaves a dead branch (that Cloudflare keeps building
+    previews for). Asserted on the default so it can't silently regress."""
+    import inspect
+
+    from pravi.services.github import create_repo
+
+    sig = inspect.signature(create_repo)
+    assert sig.parameters["delete_branch_on_merge"].default is True

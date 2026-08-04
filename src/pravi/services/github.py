@@ -214,6 +214,7 @@ async def create_repo(
     description: str = "",
     private: bool = True,
     auto_init: bool = False,
+    delete_branch_on_merge: bool = True,
 ) -> dict[str, Any]:
     """Create a new repo under the authenticated user.
 
@@ -223,6 +224,13 @@ async def create_repo(
     flow follows up by pushing a real initial commit with the chosen
     template. An auto_init'd `README.md` would show up as a separate
     commit + force a merge dance.
+
+    `delete_branch_on_merge` defaults True: pravi opens one branch per
+    ticket, so without it every merged ticket leaves a dead branch behind
+    (and Cloudflare keeps building previews for them). GitHub reaps the
+    head branch itself on merge — no pravi code in the loop. Only set on
+    repos pravi CREATES; we never silently change settings on a repo the
+    user connected.
     """
     headers = {
         "Authorization": f"Bearer {access_token}",
@@ -234,6 +242,7 @@ async def create_repo(
         "description": description,
         "private": private,
         "auto_init": auto_init,
+        "delete_branch_on_merge": delete_branch_on_merge,
     }
     async with httpx.AsyncClient(timeout=15.0) as client:
         r = await client.post(

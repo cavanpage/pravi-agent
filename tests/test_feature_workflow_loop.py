@@ -583,6 +583,21 @@ async def test_pr_closed_without_merge_cancels_the_ticket():
     assert "pr_closed" in rec.events
 
 
+async def test_worktree_is_reaped_once_the_pr_settles():
+    """Worktrees used to pile up forever: the workflow ended at pr_open
+    and `cleanup_worktree` defaults False. Now the merge watch reaps it
+    on the way out, whatever the PR's outcome."""
+    rec = Recorder()  # default script: merges on the first poll
+    await _run(rec, max_e2e_attempts=1)
+    assert rec.count("cleanup") == 1
+
+    # Same on a PR that's closed without merging — the work is abandoned,
+    # so the worktree is equally dead.
+    rec_closed = Recorder(pr_state_script=["closed"])
+    await _run(rec_closed, max_e2e_attempts=1)
+    assert rec_closed.count("cleanup") == 1
+
+
 async def test_missing_specs_are_fed_back_as_a_repair_signal():
     rec = Recorder(
         e2e_script=[
